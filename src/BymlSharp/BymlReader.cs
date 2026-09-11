@@ -17,7 +17,7 @@ internal static class BymlReader
     private const int HeaderSize = 0x10;
     private const int ContainerHeaderSize = 4;
 
-    public static Byml Read(ReadOnlySpan<byte> data)
+    public static BymlFile Read(ReadOnlySpan<byte> data)
     {
         if (data.Length < HeaderSize) throw new InvalidDataException("Too short to be a BYML document.");
 
@@ -29,8 +29,10 @@ internal static class BymlReader
         Cursor c = new(data, big);
 
         ushort version = c.U16(0x02);
-        if (version is < 2 or > 9)
-            throw new InvalidDataException($"Unsupported BYML version {version}.");
+        if (!BymlVersion.IsSupported(version))
+            throw new InvalidDataException(
+                $"Unsupported BYML version {version}; this reads " +
+                $"{BymlVersion.Minimum} to {BymlVersion.Maximum}.");
 
         int keyTable = c.I32(0x04);
         int stringTable = c.I32(0x08);
@@ -40,16 +42,27 @@ internal static class BymlReader
         string[] strings = ReadStringTable(c, stringTable);
 
         // A document whose root offset is zero holds nothing at all, which is legal.
-        return root == 0 ? Byml.Null : ReadNode(c, keys, strings, root, TypeAt(c, root));
+        Byml node = root == 0 ? Byml.Null : ReadNode(c, keys, strings, root, TypeAt(c, root));
+        return new BymlFile(node, version, big);
     }
 
     private static BymlType TypeAt(in Cursor c, int offset) => (BymlType)c.U8(offset);
+
+    /// <summary>
+    /// How many entries a container holds.
+    /// </summary>
+    /// <remarks>
+    /// The header is a type byte and then a 24-bit count, and only the count is byte-ordered -
+    /// the type stays at the front either way. Reading the four bytes as one integer happens
+    /// to work little endian and quietly does not big endian.
+    /// </remarks>
+    private static int CountAt(in Cursor c, int offset) => c.U24(offset + 1);
 
     private static string[] ReadStringTable(in Cursor c, int offset)
     {
         if (offset == 0) return [];
 
-        int count = c.I32(offset) >> 8;
+        int count = CountAt(c, offset);
         if (count == 0) return [];
 
         // Offsets are relative to the container, and there is one more of them than there are
@@ -77,7 +90,7 @@ internal static class BymlReader
             BymlType.HashMap64 => ReadHashMap(c, keys, strings, value, wide: true),
 
             BymlType.String => Byml.Of(type, value >= 0 && value < strings.Length ? strings[value] : string.Empty),
-            BymlType.Binary or BymlType.BinaryAligned => Byml.Of(BymlType.Binary, ReadBinary(c, value, type)),
+            BymlType.Binary or BymlType.BinaryAligned => ReadBinary(c, value, type),
 
             // Four bytes or fewer travel in the node itself.
             BymlType.Bool => Byml.Of(type, value != 0),
@@ -94,28 +107,32 @@ internal static class BymlReader
             _ => throw new InvalidDataException($"Unsupported BYML node type 0x{(byte)type:X2}."),
         };
 
-    private static byte[] ReadBinary(in Cursor c, int offset, BymlType type)
+    private static Byml ReadBinary(in Cursor c, int offset, BymlType type)
     {
         int size = c.I32(offset);
 
-        // The aligned kind spends another four bytes saying what it is aligned to.
-        int start = offset + (type == BymlType.BinaryAligned ? 8 : 4);
-        return c.Slice(start, size).ToArray();
+        // The aligned kind spends another four bytes saying what it is aligned to, and that
+        // has to survive: it is what the node is for, and writing it back without the
+        // alignment would quietly turn it into the plain kind.
+        if (type is BymlType.BinaryAligned)
+            return Byml.Of(type, (c.Slice(offset + 8, size).ToArray(), c.I32(offset + 4)));
+
+        return Byml.Of(BymlType.Binary, c.Slice(offset + 4, size).ToArray());
     }
 
     private static Byml ReadMap(in Cursor c, string[] keys, string[] strings, int offset)
     {
-        int count = c.I32(offset) >> 8;
+        int count = CountAt(c, offset);
         Dictionary<string, Byml> map = new(count, StringComparer.Ordinal);
 
         for (int i = 0; i < count; i++)
         {
             // Eight bytes an entry: three bytes of key index, the type, then the payload.
             int entry = offset + ContainerHeaderSize + i * 8;
-            int packed = c.I32(entry);
 
-            int keyIndex = packed & 0xFFFFFF;
-            BymlType type = (BymlType)(byte)(packed >> 24);
+            // Three bytes of key index in the document's order, then the type.
+            int keyIndex = c.U24(entry);
+            BymlType type = (BymlType)c.U8(entry + 3);
 
             string key = keyIndex >= 0 && keyIndex < keys.Length ? keys[keyIndex] : $"<{keyIndex}>";
             map[key] = ReadNode(c, keys, strings, c.I32(entry + 4), type);
@@ -126,7 +143,7 @@ internal static class BymlReader
 
     private static Byml ReadArray(in Cursor c, string[] keys, string[] strings, int offset)
     {
-        int count = c.I32(offset) >> 8;
+        int count = CountAt(c, offset);
         List<Byml> array = new(count);
 
         // The types come first, one byte each, then padding out to four so the payloads that
@@ -142,7 +159,7 @@ internal static class BymlReader
 
     private static Byml ReadHashMap(in Cursor c, string[] keys, string[] strings, int offset, bool wide)
     {
-        int count = c.I32(offset) >> 8;
+        int count = CountAt(c, offset);
         int entrySize = wide ? 0xC : 0x8;
 
         Dictionary<ulong, Byml> map = new(count);
@@ -179,6 +196,15 @@ internal static class BymlReader
             : BinaryPrimitives.ReadInt32LittleEndian(At(at, 4));
 
         public uint U32(int at) => unchecked((uint)I32(at));
+
+        /// <summary>A 24-bit value in the document's byte order.</summary>
+        public int U24(int at)
+        {
+            ReadOnlySpan<byte> b = At(at, 3);
+            return _big
+                ? (b[0] << 16) | (b[1] << 8) | b[2]
+                : b[0] | (b[1] << 8) | (b[2] << 16);
+        }
 
         public long I64(int at) => _big
             ? BinaryPrimitives.ReadInt64BigEndian(At(at, 8))
