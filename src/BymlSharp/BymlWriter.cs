@@ -3,16 +3,6 @@ using System.Text;
 
 namespace BymlSharp;
 
-/// <summary>
-/// Writes a node tree back to the binary form.
-/// </summary>
-/// <remarks>
-/// Two passes. The first collects every map key and every string value, because both live in
-/// tables that the rest of the document indexes into and the game binary-searches, so they
-/// have to be sorted before anything can reference them. The second writes the header, the
-/// two tables, and then the nodes - each container writing its children's offsets as it goes
-/// and appending the children after itself.
-/// </remarks>
 internal static class BymlWriter
 {
     private const int HeaderSize = 0x10;
@@ -49,7 +39,7 @@ internal static class BymlWriter
                 $"A BYML document's root must be a container or null, not {root.Type}.");
         }
 
-        // "YB" little, "BY" big - the magic is the one field whose order is fixed.
+        // "YB" little, "BY" big.
         buffer.SetU8(0, (byte)(bigEndian ? 'B' : 'Y'));
         buffer.SetU8(1, (byte)(bigEndian ? 'Y' : 'B'));
         buffer.SetU16(0x02, (ushort)version);
@@ -102,8 +92,6 @@ internal static class BymlWriter
 
         AddHeader(buffer, BymlType.StringTable, values.Length);
 
-        // One offset per string plus a final one marking where the last ends, all relative to
-        // the container.
         int running = ContainerHeaderSize + (values.Length + 1) * 4;
         buffer.AddI32(running);
         foreach (string value in values)
@@ -119,28 +107,12 @@ internal static class BymlWriter
         return offset;
     }
 
-    /// <summary>
-    /// Writes a container header: the type byte, then a 24-bit count.
-    /// </summary>
-    /// <remarks>
-    /// Only the count is byte-ordered. Packing both into one integer works little endian and
-    /// puts the type at the wrong end big endian.
-    /// </remarks>
     private static void AddHeader(Buffer buffer, BymlType type, int count)
     {
         buffer.AddU8((byte)type);
         buffer.AddU24(count);
     }
 
-    /// <summary>
-    /// Writes a container and everything under it.
-    /// </summary>
-    /// <remarks>
-    /// A node that does not fit in four bytes - every container, and the 64-bit values - is
-    /// referenced by offset instead. Those are staged while the container's own body is
-    /// written, then appended one at a time with their offsets patched back in, which keeps a
-    /// container contiguous and its children immediately after it.
-    /// </remarks>
     private static void WriteContainer(
         Buffer buffer, Byml node, Dictionary<string, int> keys, Dictionary<string, int> strings)
     {
@@ -156,13 +128,11 @@ internal static class BymlWriter
         {
             case BymlType.Map:
             {
-                // Entries are sorted by key, as the game binary-searches them.
                 var entries = node.AsMap.OrderBy(e => e.Key, StringComparer.Ordinal).ToList();
                 AddHeader(buffer, BymlType.Map, entries.Count);
 
                 foreach ((string key, Byml child) in entries)
                 {
-                    // Three bytes of key index, then the type - ordered like the header.
                     buffer.AddU24(keys[key]);
                     buffer.AddU8((byte)child.Type);
                     int patch = buffer.Length;
@@ -193,7 +163,6 @@ internal static class BymlWriter
             {
                 bool wide = node.Type is BymlType.HashMap64;
 
-                // Sorted by hash, for the same reason maps are sorted by key.
                 var entries = node.AsHashMap.OrderBy(e => e.Key).ToList();
                 AddHeader(buffer, node.Type, entries.Count);
 
@@ -219,7 +188,7 @@ internal static class BymlWriter
         foreach ((int patch, Byml child) in staged)
         {
             if (child.IsContainer) buffer.Align(4);
-            else buffer.Align(8);              // the 64-bit values want eight
+            else buffer.Align(8);
 
             buffer.SetI32(patch, buffer.Length);
 
@@ -228,7 +197,6 @@ internal static class BymlWriter
         }
     }
 
-    /// <summary>Writes a value that fits in the node itself, and says whether it did.</summary>
     private static bool Inline(Buffer buffer, Byml node, Dictionary<string, int> strings, int patchAt)
     {
         switch (node.Type)
@@ -267,7 +235,6 @@ internal static class BymlWriter
         }
     }
 
-    /// <summary>A growable buffer that writes in the document's byte order.</summary>
     private sealed class Buffer(bool bigEndian)
     {
         private byte[] _data = new byte[4096];

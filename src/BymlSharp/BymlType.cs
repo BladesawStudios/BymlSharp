@@ -1,14 +1,11 @@
 namespace BymlSharp;
 
-/// <summary>The node kinds a BYML document can hold.</summary>
 public enum BymlType : byte
 {
     None = 0x00,
 
-    /// <summary>A map keyed by a 32-bit hash rather than by name.</summary>
     HashMap32 = 0x20,
 
-    /// <summary>A map keyed by a 64-bit hash. Placement files use these for actor ids.</summary>
     HashMap64 = 0x21,
 
     String = 0xA0,

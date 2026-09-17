@@ -3,15 +3,6 @@ using System.Text;
 
 namespace BymlSharp;
 
-/// <summary>
-/// Parses the binary form into <see cref="Byml"/> nodes.
-/// </summary>
-/// <remarks>
-/// The layout is a header naming three offsets - a table of key names, a table of string
-/// values, and the root node - and then nodes that reference each other by absolute offset.
-/// A node is a type byte and four bytes of payload: small values sit in the payload itself,
-/// while anything larger than four bytes, containers included, puts an offset there instead.
-/// </remarks>
 internal static class BymlReader
 {
     private const int HeaderSize = 0x10;
@@ -21,7 +12,6 @@ internal static class BymlReader
     {
         if (data.Length < HeaderSize) throw new InvalidDataException("Too short to be a BYML document.");
 
-        // The magic is the one field whose byte order tells you the rest: "YB" little, "BY" big.
         bool big = data[0] == (byte)'B' && data[1] == (byte)'Y';
         if (!big && !(data[0] == (byte)'Y' && data[1] == (byte)'B'))
             throw new InvalidDataException("Not a BYML document: expected a YB or BY magic.");
@@ -48,14 +38,6 @@ internal static class BymlReader
 
     private static BymlType TypeAt(in Cursor c, int offset) => (BymlType)c.U8(offset);
 
-    /// <summary>
-    /// How many entries a container holds.
-    /// </summary>
-    /// <remarks>
-    /// The header is a type byte and then a 24-bit count, and only the count is byte-ordered -
-    /// the type stays at the front either way. Reading the four bytes as one integer happens
-    /// to work little endian and quietly does not big endian.
-    /// </remarks>
     private static int CountAt(in Cursor c, int offset) => c.U24(offset + 1);
 
     private static string[] ReadStringTable(in Cursor c, int offset)
@@ -65,8 +47,6 @@ internal static class BymlReader
         int count = CountAt(c, offset);
         if (count == 0) return [];
 
-        // Offsets are relative to the container, and there is one more of them than there are
-        // strings: the last marks where the final one ends.
         string[] table = new string[count];
         for (int i = 0; i < count; i++)
         {
@@ -92,13 +72,11 @@ internal static class BymlReader
             BymlType.String => Byml.Of(type, value >= 0 && value < strings.Length ? strings[value] : string.Empty),
             BymlType.Binary or BymlType.BinaryAligned => ReadBinary(c, value, type),
 
-            // Four bytes or fewer travel in the node itself.
             BymlType.Bool => Byml.Of(type, value != 0),
             BymlType.Int => Byml.Of(type, value),
             BymlType.UInt => Byml.Of(type, unchecked((uint)value)),
             BymlType.Float => Byml.Of(type, BitConverter.Int32BitsToSingle(value)),
 
-            // Anything wider is stored elsewhere and the node holds its offset.
             BymlType.Int64 => Byml.Of(type, c.I64(value)),
             BymlType.UInt64 => Byml.Of(type, unchecked((ulong)c.I64(value))),
             BymlType.Double => Byml.Of(type, BitConverter.Int64BitsToDouble(c.I64(value))),
@@ -111,9 +89,6 @@ internal static class BymlReader
     {
         int size = c.I32(offset);
 
-        // The aligned kind spends another four bytes saying what it is aligned to, and that
-        // has to survive: it is what the node is for, and writing it back without the
-        // alignment would quietly turn it into the plain kind.
         if (type is BymlType.BinaryAligned)
             return Byml.Of(type, (c.Slice(offset + 8, size).ToArray(), c.I32(offset + 4)));
 
@@ -127,10 +102,8 @@ internal static class BymlReader
 
         for (int i = 0; i < count; i++)
         {
-            // Eight bytes an entry: three bytes of key index, the type, then the payload.
             int entry = offset + ContainerHeaderSize + i * 8;
 
-            // Three bytes of key index in the document's order, then the type.
             int keyIndex = c.U24(entry);
             BymlType type = (BymlType)c.U8(entry + 3);
 
@@ -146,8 +119,6 @@ internal static class BymlReader
         int count = CountAt(c, offset);
         List<Byml> array = new(count);
 
-        // The types come first, one byte each, then padding out to four so the payloads that
-        // follow stay aligned.
         int types = offset + ContainerHeaderSize;
         int values = types + ((count + 3) & ~3);
 
@@ -179,7 +150,6 @@ internal static class BymlReader
         return Byml.Of(wide ? BymlType.HashMap64 : BymlType.HashMap32, map);
     }
 
-    /// <summary>Bounds-checked reads in the document's byte order.</summary>
     private readonly ref struct Cursor(ReadOnlySpan<byte> data, bool big)
     {
         private readonly ReadOnlySpan<byte> _data = data;
@@ -197,7 +167,6 @@ internal static class BymlReader
 
         public uint U32(int at) => unchecked((uint)I32(at));
 
-        /// <summary>A 24-bit value in the document's byte order.</summary>
         public int U24(int at)
         {
             ReadOnlySpan<byte> b = At(at, 3);
