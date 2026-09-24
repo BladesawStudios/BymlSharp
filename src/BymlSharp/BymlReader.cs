@@ -28,12 +28,32 @@ internal static class BymlReader
         int stringTable = c.I32(0x08);
         int root = c.I32(0x0C);
 
-        string[] keys = ReadStringTable(c, keyTable);
-        string[] strings = ReadStringTable(c, stringTable);
+        Tables t = new(ReadStringTable(c, keyTable), ReadStringTable(c, stringTable));
 
         // A document whose root offset is zero holds nothing at all, which is legal.
-        Byml node = root == 0 ? Byml.Null : ReadNode(c, keys, strings, root, TypeAt(c, root));
-        return new BymlFile(node, version, big);
+        Byml node = root == 0 ? Byml.Null : ReadNode(c, t, root, TypeAt(c, root));
+        return new BymlFile(node, version, big) { ShareIdenticalContainers = t.Shared };
+    }
+
+    private sealed class Tables(string[] keys, string[] strings)
+    {
+        private readonly HashSet<int> _containers = [];
+
+        public string[] Keys { get; } = keys;
+        public string[] Strings { get; } = strings;
+
+        public bool Shared { get; private set; }
+
+        public int FirstValue { get; set; } = int.MaxValue;
+
+        public int LastNodeFirstValue { get; set; } = int.MaxValue;
+
+        public bool Visit(int offset)
+        {
+            if (_containers.Add(offset)) return true;
+            Shared = true;
+            return false;
+        }
     }
 
     private static BymlType TypeAt(in Cursor c, int offset) => (BymlType)c.U8(offset);
@@ -61,15 +81,40 @@ internal static class BymlReader
         return table;
     }
 
-    private static Byml ReadNode(in Cursor c, string[] keys, string[] strings, int value, BymlType type)
+    private static Byml ReadNode(in Cursor c, Tables t, int value, BymlType type)
+    {
+        if (type is BymlType.Map or BymlType.Array or BymlType.HashMap32 or BymlType.HashMap64)
+        {
+            bool first = t.Visit(value);
+            int outer = t.FirstValue;
+            t.FirstValue = int.MaxValue;
+            Byml node = ReadValue(c, t, value, type);
+            t.LastNodeFirstValue = first ? t.FirstValue : int.MaxValue;
+            t.FirstValue = first ? Math.Min(outer, t.FirstValue) : outer;
+            return node;
+        }
+
+        if (BymlWriter.IsInline(type))
+        {
+            t.LastNodeFirstValue = int.MaxValue;
+        }
+        else
+        {
+            t.LastNodeFirstValue = value;
+            t.FirstValue = Math.Min(t.FirstValue, value);
+        }
+        return ReadValue(c, t, value, type);
+    }
+
+    private static Byml ReadValue(in Cursor c, Tables t, int value, BymlType type)
         => type switch
         {
-            BymlType.Map => ReadMap(c, keys, strings, value),
-            BymlType.Array => ReadArray(c, keys, strings, value),
-            BymlType.HashMap32 => ReadHashMap(c, keys, strings, value, wide: false),
-            BymlType.HashMap64 => ReadHashMap(c, keys, strings, value, wide: true),
+            BymlType.Map => ReadMap(c, t, value),
+            BymlType.Array => ReadArray(c, t, value),
+            BymlType.HashMap32 => ReadHashMap(c, t, value, wide: false),
+            BymlType.HashMap64 => ReadHashMap(c, t, value, wide: true),
 
-            BymlType.String => Byml.Of(type, value >= 0 && value < strings.Length ? strings[value] : string.Empty),
+            BymlType.String => Byml.Of(type, value >= 0 && value < t.Strings.Length ? t.Strings[value] : string.Empty),
             BymlType.Binary or BymlType.BinaryAligned => ReadBinary(c, value, type),
 
             BymlType.Bool => Byml.Of(type, value != 0),
@@ -95,26 +140,56 @@ internal static class BymlReader
         return Byml.Of(BymlType.Binary, c.Slice(offset + 4, size).ToArray());
     }
 
-    private static Byml ReadMap(in Cursor c, string[] keys, string[] strings, int offset)
+    private static Byml ReadMap(in Cursor c, Tables t, int offset)
     {
         int count = CountAt(c, offset);
-        Dictionary<string, Byml> map = new(count, StringComparer.Ordinal);
+        var entries = new (string Key, BymlType Type, int Value)[count];
 
         for (int i = 0; i < count; i++)
         {
             int entry = offset + ContainerHeaderSize + i * 8;
 
             int keyIndex = c.U24(entry);
-            BymlType type = (BymlType)c.U8(entry + 3);
-
-            string key = keyIndex >= 0 && keyIndex < keys.Length ? keys[keyIndex] : $"<{keyIndex}>";
-            map[key] = ReadNode(c, keys, strings, c.I32(entry + 4), type);
+            string key = keyIndex >= 0 && keyIndex < t.Keys.Length ? t.Keys[keyIndex] : $"<{keyIndex}>";
+            entries[i] = (key, (BymlType)c.U8(entry + 3), c.I32(entry + 4));
         }
+
+        var nodes = new Byml[count];
+        var firstValues = new int[count];
+        for (int i = 0; i < count; i++)
+        {
+            nodes[i] = ReadNode(c, t, entries[i].Value, entries[i].Type);
+            firstValues[i] = t.LastNodeFirstValue;
+        }
+
+        bool IsContainer(int i) => entries[i].Type is BymlType.Map or BymlType.Array
+            or BymlType.HashMap32 or BymlType.HashMap64;
+
+        int[] outOfLine = [.. Enumerable.Range(0, count).Where(i => !BymlWriter.IsInline(entries[i].Type))];
+        int[] containers = [.. outOfLine.Where(IsContainer).OrderBy(i => entries[i].Value)];
+        int[] values = [.. outOfLine.Where(i => !IsContainer(i)).OrderBy(i => entries[i].Value)];
+
+        List<int> merged = new(outOfLine.Length);
+        int ci = 0, vi = 0;
+        while (ci < containers.Length || vi < values.Length)
+        {
+            bool containerFirst = vi == values.Length || (ci < containers.Length && (
+                firstValues[containers[ci]] != int.MaxValue
+                    ? firstValues[containers[ci]] < entries[values[vi]].Value
+                    : string.CompareOrdinal(entries[containers[ci]].Key, entries[values[vi]].Key) < 0));
+            merged.Add(containerFirst ? containers[ci++] : values[vi++]);
+        }
+
+        int[] order = [.. Enumerable.Range(0, count)];
+        for (int i = 0; i < outOfLine.Length; i++) order[outOfLine[i]] = merged[i];
+
+        Dictionary<string, Byml> map = new(count, StringComparer.Ordinal);
+        foreach (int i in order) map[entries[i].Key] = nodes[i];
 
         return Byml.Of(BymlType.Map, map);
     }
 
-    private static Byml ReadArray(in Cursor c, string[] keys, string[] strings, int offset)
+    private static Byml ReadArray(in Cursor c, Tables t, int offset)
     {
         int count = CountAt(c, offset);
         List<Byml> array = new(count);
@@ -123,12 +198,12 @@ internal static class BymlReader
         int values = types + ((count + 3) & ~3);
 
         for (int i = 0; i < count; i++)
-            array.Add(ReadNode(c, keys, strings, c.I32(values + i * 4), (BymlType)c.U8(types + i)));
+            array.Add(ReadNode(c, t, c.I32(values + i * 4), (BymlType)c.U8(types + i)));
 
         return Byml.Of(BymlType.Array, array);
     }
 
-    private static Byml ReadHashMap(in Cursor c, string[] keys, string[] strings, int offset, bool wide)
+    private static Byml ReadHashMap(in Cursor c, Tables t, int offset, bool wide)
     {
         int count = CountAt(c, offset);
         int entrySize = wide ? 0xC : 0x8;
@@ -144,7 +219,7 @@ internal static class BymlReader
             ulong hash = wide ? unchecked((ulong)c.I64(entry)) : c.U32(entry);
             int value = c.I32(entry + (wide ? 8 : 4));
 
-            map[hash] = ReadNode(c, keys, strings, value, (BymlType)c.U8(types + i));
+            map[hash] = ReadNode(c, t, value, (BymlType)c.U8(types + i));
         }
 
         return Byml.Of(wide ? BymlType.HashMap64 : BymlType.HashMap32, map);

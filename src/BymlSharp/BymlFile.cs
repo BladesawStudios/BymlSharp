@@ -23,6 +23,8 @@ public sealed class BymlFile(Byml root, int version = BymlVersion.Default, bool 
     public int Version { get; set; } = version;
     public bool BigEndian { get; set; } = bigEndian;
 
+    public bool ShareIdenticalContainers { get; set; }
+
     public static BymlFile FromBinary(ReadOnlySpan<byte> data) => BymlReader.Read(data);
 
     public static BymlFile FromFile(string path) => FromBinary(File.ReadAllBytes(path));
@@ -34,7 +36,7 @@ public sealed class BymlFile(Byml root, int version = BymlVersion.Default, bool 
                 $"BYML version {Version} is outside the supported range " +
                 $"{BymlVersion.Minimum}-{BymlVersion.Maximum}.");
 
-        return BymlWriter.Write(Root, Version, BigEndian);
+        return BymlWriter.Write(Root, Version, BigEndian, ShareIdenticalContainers);
     }
 
     public void WriteTo(string path) => File.WriteAllBytes(path, Write());

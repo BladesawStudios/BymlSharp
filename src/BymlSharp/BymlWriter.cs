@@ -8,7 +8,7 @@ internal static class BymlWriter
     private const int HeaderSize = 0x10;
     private const int ContainerHeaderSize = 4;
 
-    public static byte[] Write(Byml root, int version, bool bigEndian)
+    public static byte[] Write(Byml root, int version, bool bigEndian, bool shareIdenticalContainers = false)
     {
         SortedSet<string> keySet = new(StringComparer.Ordinal);
         SortedSet<string> stringSet = new(StringComparer.Ordinal);
@@ -30,8 +30,14 @@ internal static class BymlWriter
         if (root.IsContainer)
         {
             buffer.Align(4);
+            Dictionary<(Byml Parent, int Slot), int> values = [];
+            WriteValues(buffer, root, values, shareIdenticalContainers ? new(ContentComparer.Instance) : null);
+
+            buffer.Align(4);
             rootOffset = buffer.Length;
-            WriteContainer(buffer, root, keyIndex, stringIndex);
+            Placement placement = new(keyIndex, stringIndex, values,
+                shareIdenticalContainers ? new(ContentComparer.Instance) : null);
+            WriteContainer(buffer, root, placement);
         }
         else if (!root.IsNull)
         {
@@ -113,15 +119,50 @@ internal static class BymlWriter
         buffer.AddU24(count);
     }
 
-    private static void WriteContainer(
-        Buffer buffer, Byml node, Dictionary<string, int> keys, Dictionary<string, int> strings)
+    private static IEnumerable<Byml> PlacementOrder(Byml node) => node.Type switch
+    {
+        BymlType.Map => node.AsMap.Values,
+        BymlType.Array => node.AsArray,
+        _ => node.AsHashMap.OrderBy(e => e.Key).Select(e => e.Value),
+    };
+
+    private static void WriteValues(
+        Buffer buffer, Byml node, Dictionary<(Byml Parent, int Slot), int> offsets, HashSet<Byml>? visited)
+    {
+        if (visited is not null && !visited.Add(node)) return;
+
+        int slot = 0;
+        foreach (Byml child in PlacementOrder(node))
+        {
+            if (child.IsContainer)
+            {
+                WriteValues(buffer, child, offsets, visited);
+            }
+            else if (!IsInline(child.Type))
+            {
+                if (child.Type is BymlType.BinaryAligned) buffer.AlignPayload(8, child.BinaryAlignment);
+                else if (child.Type is not BymlType.Binary) buffer.Align(4);
+                offsets[(node, slot)] = buffer.Length;
+                WriteOutOfLine(buffer, child);
+            }
+            slot++;
+        }
+    }
+
+    private sealed record Placement(
+        Dictionary<string, int> Keys, Dictionary<string, int> Strings,
+        Dictionary<(Byml Parent, int Slot), int> Values, Dictionary<Byml, int>? Placed);
+
+    private static void WriteContainer(Buffer buffer, Byml node, Placement at)
     {
         List<(int Patch, Byml Node)> staged = [];
+        Dictionary<string, int> keys = at.Keys;
 
-        void WriteChild(Byml child, int patchAt)
+        void WriteChild(Byml child, int slot, int patchAt)
         {
-            if (Inline(buffer, child, strings, patchAt)) return;
-            staged.Add((patchAt, child));
+            if (Inline(buffer, child, at.Strings, patchAt)) return;
+            if (child.IsContainer) staged.Add((patchAt, child));
+            else buffer.SetI32(patchAt, at.Values[(node, slot)]);
         }
 
         switch (node.Type)
@@ -131,14 +172,18 @@ internal static class BymlWriter
                 var entries = node.AsMap.OrderBy(e => e.Key, StringComparer.Ordinal).ToList();
                 AddHeader(buffer, BymlType.Map, entries.Count);
 
+                Dictionary<string, int> patches = new(entries.Count, StringComparer.Ordinal);
                 foreach ((string key, Byml child) in entries)
                 {
                     buffer.AddU24(keys[key]);
                     buffer.AddU8((byte)child.Type);
-                    int patch = buffer.Length;
+                    patches[key] = buffer.Length;
                     buffer.AddI32(0);
-                    WriteChild(child, patch);
                 }
+
+                int slot = 0;
+                foreach ((string key, Byml child) in node.AsMap)
+                    WriteChild(child, slot++, patches[key]);
                 break;
             }
 
@@ -150,11 +195,11 @@ internal static class BymlWriter
                 foreach (Byml child in items) buffer.AddU8((byte)child.Type);
                 buffer.Align(4);
 
-                foreach (Byml child in items)
+                for (int slot = 0; slot < items.Count; slot++)
                 {
                     int patch = buffer.Length;
                     buffer.AddI32(0);
-                    WriteChild(child, patch);
+                    WriteChild(items[slot], slot, patch);
                 }
                 break;
             }
@@ -166,14 +211,15 @@ internal static class BymlWriter
                 var entries = node.AsHashMap.OrderBy(e => e.Key).ToList();
                 AddHeader(buffer, node.Type, entries.Count);
 
-                foreach ((ulong hash, Byml child) in entries)
+                for (int slot = 0; slot < entries.Count; slot++)
                 {
+                    (ulong hash, Byml child) = entries[slot];
                     if (wide) buffer.AddI64(unchecked((long)hash));
                     else buffer.AddI32(unchecked((int)(uint)hash));
 
                     int patch = buffer.Length;
                     buffer.AddI32(0);
-                    WriteChild(child, patch);
+                    WriteChild(child, slot, patch);
                 }
 
                 foreach ((_, Byml child) in entries) buffer.AddU8((byte)child.Type);
@@ -185,17 +231,80 @@ internal static class BymlWriter
                 throw new InvalidOperationException($"{node.Type} is not a container.");
         }
 
+        // Child containers follow their parent, each one's own children before the next sibling.
         foreach ((int patch, Byml child) in staged)
         {
-            if (child.IsContainer) buffer.Align(4);
-            else buffer.Align(8);
+            if (at.Placed is not null && at.Placed.TryGetValue(child, out int existing))
+            {
+                buffer.SetI32(patch, existing);
+                continue;
+            }
 
+            buffer.Align(4);
             buffer.SetI32(patch, buffer.Length);
-
-            if (child.IsContainer) WriteContainer(buffer, child, keys, strings);
-            else WriteOutOfLine(buffer, child);
+            at.Placed?.Add(child, buffer.Length);
+            WriteContainer(buffer, child, at);
         }
     }
+
+    private sealed class ContentComparer : IEqualityComparer<Byml>
+    {
+        public static readonly ContentComparer Instance = new();
+
+        public bool Equals(Byml? a, Byml? b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a is null || b is null || a.Type != b.Type || a.Count != b.Count) return false;
+
+            return a.Type switch
+            {
+                BymlType.Map => a.AsMap.All(e => b.AsMap.TryGetValue(e.Key, out Byml? other) && Equals(e.Value, other)),
+                BymlType.Array => a.AsArray.Zip(b.AsArray).All(p => Equals(p.First, p.Second)),
+                BymlType.HashMap32 or BymlType.HashMap64
+                    => a.AsHashMap.All(e => b.AsHashMap.TryGetValue(e.Key, out Byml? other) && Equals(e.Value, other)),
+                BymlType.Binary or BymlType.BinaryAligned
+                    => a.BinaryAlignment == b.BinaryAlignment && a.Binary.AsSpan().SequenceEqual(b.Binary),
+                _ => Equals(a.Value, b.Value),
+            };
+        }
+
+        public int GetHashCode(Byml node)
+        {
+            HashCode hash = new();
+            hash.Add(node.Type);
+            hash.Add(node.Count);
+            switch (node.Type)
+            {
+                case BymlType.Map:
+                    foreach (var (key, child) in node.AsMap.OrderBy(e => e.Key, StringComparer.Ordinal))
+                    {
+                        hash.Add(key, StringComparer.Ordinal);
+                        hash.Add(GetHashCode(child));
+                    }
+                    break;
+                case BymlType.Array:
+                    foreach (Byml child in node.AsArray) hash.Add(GetHashCode(child));
+                    break;
+                case BymlType.HashMap32 or BymlType.HashMap64:
+                    foreach (var (key, child) in node.AsHashMap.OrderBy(e => e.Key))
+                    {
+                        hash.Add(key);
+                        hash.Add(GetHashCode(child));
+                    }
+                    break;
+                case BymlType.Binary or BymlType.BinaryAligned:
+                    hash.AddBytes(node.Binary);
+                    break;
+                default:
+                    hash.Add(node.Value);
+                    break;
+            }
+            return hash.ToHashCode();
+        }
+    }
+
+    internal static bool IsInline(BymlType type) => type is BymlType.String or BymlType.Bool or BymlType.Int
+        or BymlType.UInt or BymlType.Float or BymlType.Null or BymlType.None;
 
     private static bool Inline(Buffer buffer, Byml node, Dictionary<string, int> strings, int patchAt)
     {
@@ -252,6 +361,13 @@ internal static class BymlWriter
         {
             int padded = (Length + to - 1) / to * to;
             Reserve(padded - Length);
+        }
+
+        public void AlignPayload(int skip, int to)
+        {
+            if (to <= 1) return;
+            int payload = Length + skip;
+            Reserve((payload + to - 1) / to * to - payload);
         }
 
         public void AddU8(byte value)
