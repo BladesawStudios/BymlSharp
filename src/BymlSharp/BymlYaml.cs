@@ -14,13 +14,13 @@ internal static partial class BymlYaml
     private const string BinaryTag = "tag:yaml.org,2002:binary";
     private const int FlowLimit = 8;
 
-    public static string Write(Byml root)
+    public static string Write(Byml root, bool anchors)
     {
         StringWriter text = new();
         Emitter emitter = new(text, new EmitterSettings().WithBestWidth(int.MaxValue));
         emitter.Emit(new StreamStart());
         emitter.Emit(new DocumentStart());
-        Emit(emitter, root, new Anchors(root));
+        Emit(emitter, root, new Anchors(anchors ? root : null));
         emitter.Emit(new DocumentEnd(true));
         emitter.Emit(new StreamEnd());
         return text.ToString();
@@ -45,7 +45,10 @@ internal static partial class BymlYaml
         private readonly HashSet<Byml> _shared = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<Byml, string> _names = new(ReferenceEqualityComparer.Instance);
 
-        public Anchors(Byml root) => Count(root);
+        public Anchors(Byml? root)
+        {
+            if (root is not null) Count(root);
+        }
 
         private void Count(Byml node)
         {

@@ -37,10 +37,20 @@ public class CorpusTests
                     return;
                 }
 
-                string yaml = file.Root.ToYaml();
+                // Plain text, as editors show it, written back with the layout of the file it came from.
+                string plain = file.Root.ToYaml();
+                byte[] fromPlain = BymlFile.FromYaml(plain, file).Write();
+                if (exact && !fromPlain.AsSpan().SequenceEqual(data))
+                {
+                    failures.Add($"{name}: plain YAML with the original's layout differs");
+                    return;
+                }
+
+                // Text with anchors carries the layout itself, so it needs no original.
+                string yaml = file.Root.ToYaml(anchors: true);
                 Byml back = Byml.FromYaml(yaml);
                 byte[] rebuilt = new BymlFile(back, file.Version, file.BigEndian).Write();
-                if (back.ToYaml() != yaml) failures.Add($"{name}: YAML re-emit differs");
+                if (back.ToYaml(anchors: true) != yaml) failures.Add($"{name}: YAML re-emit differs");
                 else if (exact && !rebuilt.AsSpan().SequenceEqual(data)) failures.Add($"{name}: YAML rebuild differs");
                 else if (!exact && Byml.FromBinary(rebuilt).ToYaml() != yaml) failures.Add($"{name}: YAML rebuild changes the tree");
             }

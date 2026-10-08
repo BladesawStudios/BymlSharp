@@ -37,9 +37,15 @@ public sealed class Byml
 
     public static Byml FromYamlFile(string path) => FromYaml(File.ReadAllText(path));
 
-    public string ToYaml() => BymlYaml.Write(this);
+    /// <summary>
+    /// Plain YAML that oead and other tools read, with every node written where it appears, so editing one copy of a
+    /// node that the binary shares leaves the others alone. With <paramref name="anchors"/>, a node the document
+    /// shares becomes a YAML anchor and aliases, which keeps the text self-contained but couples the copies: editing
+    /// the anchored one changes them all, and tools that don't resolve aliases read them as the string "*1".
+    /// </summary>
+    public string ToYaml(bool anchors = false) => BymlYaml.Write(this, anchors);
 
-    public void ToYamlFile(string path) => File.WriteAllText(path, ToYaml());
+    public void ToYamlFile(string path, bool anchors = false) => File.WriteAllText(path, ToYaml(anchors));
 
     // ---- building ---------------------------------------------------------
     public static Byml Map(IDictionary<string, Byml>? entries = null)

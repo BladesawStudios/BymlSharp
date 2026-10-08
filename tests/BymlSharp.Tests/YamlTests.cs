@@ -85,7 +85,7 @@ public class YamlTests
             ["Phive"] = Byml.Map(new Dictionary<string, Byml> { ["ID"] = hash, ["Translate"] = translate }),
         });
 
-        string yaml = root.ToYaml();
+        string yaml = root.ToYaml(anchors: true);
         Byml back = Byml.FromYaml(yaml);
 
         Assert.Contains("&1", yaml);
@@ -93,7 +93,71 @@ public class YamlTests
         Assert.Same(back["Hash"], back["Phive"]!["ID"]);
         Assert.Same(back["Translate"], back["Phive"]!["Translate"]);
         Assert.Equal(root.ToBinary(), back.ToBinary());
-        Assert.Equal(yaml, back.ToYaml());
+        Assert.Equal(yaml, back.ToYaml(anchors: true));
+    }
+
+    private static Byml SharedDocument()
+    {
+        Byml translate = Byml.Array([1f, 2f, 3f]);
+        Byml hash = Byml.From(0x1234_5678_9ABC_DEF0ul);
+        // Keys in the order BYML stores them (sorted), so the document is one the writer reproduces exactly.
+        return Byml.Map(new Dictionary<string, Byml>
+        {
+            ["Blob"] = Byml.From([1, 2, 3, 4], 0x100),
+            ["Hash"] = hash,
+            ["Phive"] = Byml.Map(new Dictionary<string, Byml> { ["ID"] = hash, ["Translate"] = translate }),
+            ["Translate"] = translate,
+        });
+    }
+
+    [Fact]
+    public void PlainYamlHasNoAnchorsAndKeepsSharedNodesApart()
+    {
+        string yaml = SharedDocument().ToYaml();
+
+        Assert.DoesNotContain("&", yaml);
+        Assert.DoesNotContain("*", yaml);
+
+        Byml back = Byml.FromYaml(yaml);
+        Assert.NotSame(back["Translate"], back["Phive"]!["Translate"]);
+
+        back["Translate"]![0] = 9f;
+        Assert.Equal(1f, back["Phive"]!["Translate"]![0]!.Float);
+    }
+
+    [Fact]
+    public void AdoptingTheOriginalsLayoutRestoresSharingAndAlignment()
+    {
+        byte[] original = SharedDocument().ToBinary();
+        BymlFile file = BymlFile.FromBinary(original);
+        Assert.Equal(original, file.Write());
+
+        // Without the original the text can't say what was shared, or how the blob was aligned.
+        Assert.NotEqual(original, new BymlFile(Byml.FromYaml(file.Root.ToYaml()), file.Version, file.BigEndian).Write());
+
+        BymlFile rebuilt = BymlFile.FromYaml(file.Root.ToYaml(), file);
+        Assert.Equal(original, rebuilt.Write());
+        Assert.Same(rebuilt.Root["Translate"], rebuilt.Root["Phive"]!["Translate"]);
+    }
+
+    [Fact]
+    public void AnEditedCopyIsNoLongerSharedButTheRestStillIs()
+    {
+        BymlFile file = BymlFile.FromBinary(SharedDocument().ToBinary());
+        Byml text = Byml.FromYaml(file.Root.ToYaml());
+        text["Phive"]!["Translate"]![0] = 5f;
+
+        BymlFile edited = new(text);
+        edited.AdoptLayoutFrom(file);
+
+        Assert.NotSame(edited.Root["Translate"], edited.Root["Phive"]!["Translate"]);
+        Assert.Equal(1f, edited.Root["Translate"]![0]!.Float);
+        Assert.Equal(5f, edited.Root["Phive"]!["Translate"]![0]!.Float);
+        Assert.Same(edited.Root["Hash"], edited.Root["Phive"]!["ID"]);
+
+        BymlFile reread = BymlFile.FromBinary(edited.Write());
+        Assert.Equal(5f, reread.Root["Phive"]!["Translate"]![0]!.Float);
+        Assert.Equal(0x100, reread.Root["Blob"]!.BinaryAlignment);
     }
 
     [Fact]

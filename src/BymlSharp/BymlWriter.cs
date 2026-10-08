@@ -247,7 +247,7 @@ internal static class BymlWriter
         }
     }
 
-    private sealed class ContentComparer : IEqualityComparer<Byml>
+    internal sealed class ContentComparer : IEqualityComparer<Byml>
     {
         public static readonly ContentComparer Instance = new();
 
