@@ -5,8 +5,10 @@ using YamlDotNet.Core.Events;
 
 namespace BymlSharp;
 
-// Tags follow oead: plain ints are Int, plain floats Float, !u UInt, !l Int64, !ul UInt64,
-// !f64 Double, !!binary Binary. Additions: !binary_aligned {Alignment, Data}, !h32 / !h64 hash maps.
+// Tags follow oead: plain ints are Int, plain floats Float, !u UInt, !l (or !sl) Int64, !ul UInt64,
+// !f64 Double, !!binary Binary. Additions: !binary_aligned {Alignment, Data}, !h32 / !h64 hash maps,
+// anchors for nodes the document shares (one instance in several places), and !nan / !nan64 with the
+// bits of any NaN other than the quiet NaN that .nan stands for.
 internal static partial class BymlYaml
 {
     private const string BinaryTag = "tag:yaml.org,2002:binary";
@@ -18,7 +20,7 @@ internal static partial class BymlYaml
         Emitter emitter = new(text, new EmitterSettings().WithBestWidth(int.MaxValue));
         emitter.Emit(new StreamStart());
         emitter.Emit(new DocumentStart());
-        Emit(emitter, root);
+        Emit(emitter, root, new Anchors(root));
         emitter.Emit(new DocumentEnd(true));
         emitter.Emit(new StreamEnd());
         return text.ToString();
@@ -30,40 +32,75 @@ internal static partial class BymlYaml
         parser.Consume<StreamStart>();
         if (parser.TryConsume<StreamEnd>(out _)) return Byml.Null;
         parser.Consume<DocumentStart>();
-        Byml root = Parse(parser);
+        Byml root = Parse(parser, []);
         parser.Consume<DocumentEnd>();
         return root;
     }
 
     // ---- writing ----------------------------------------------------------
 
-    private static void Emit(IEmitter e, Byml node)
+    private sealed class Anchors
     {
+        private readonly HashSet<Byml> _seen = new(ReferenceEqualityComparer.Instance);
+        private readonly HashSet<Byml> _shared = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<Byml, string> _names = new(ReferenceEqualityComparer.Instance);
+
+        public Anchors(Byml root) => Count(root);
+
+        private void Count(Byml node)
+        {
+            if (BymlWriter.IsInline(node.Type)) return;
+            if (!_seen.Add(node))
+            {
+                _shared.Add(node);
+                return;
+            }
+            if (node.IsContainer)
+                foreach (Byml child in BymlWriter.PlacementOrder(node)) Count(child);
+        }
+
+        /// <summary>The anchor for a node's first appearance, or null after emitting an alias to it.</summary>
+        public AnchorName? Next(IEmitter e, Byml node)
+        {
+            if (!_shared.Contains(node)) return AnchorName.Empty;
+            if (_names.TryGetValue(node, out string? name))
+            {
+                e.Emit(new AnchorAlias(new AnchorName(name)));
+                return null;
+            }
+            _names[node] = name = (_names.Count + 1).ToString(CultureInfo.InvariantCulture);
+            return new AnchorName(name);
+        }
+    }
+
+    private static void Emit(IEmitter e, Byml node, Anchors anchors)
+    {
+        if (anchors.Next(e, node) is not { } anchor) return;
         switch (node.Type)
         {
             case BymlType.Map:
-                e.Emit(new MappingStart(AnchorName.Empty, TagName.Empty, true, Flow(node) ? MappingStyle.Flow : MappingStyle.Block));
+                e.Emit(new MappingStart(anchor, TagName.Empty, true, Flow(node) ? MappingStyle.Flow : MappingStyle.Block));
                 foreach (var (key, value) in node.AsMap)
                 {
                     Text(e, key);
-                    Emit(e, value);
+                    Emit(e, value, anchors);
                 }
                 e.Emit(new MappingEnd());
                 break;
 
             case BymlType.Array:
-                e.Emit(new SequenceStart(AnchorName.Empty, TagName.Empty, true, Flow(node) ? SequenceStyle.Flow : SequenceStyle.Block));
-                foreach (Byml value in node.AsArray) Emit(e, value);
+                e.Emit(new SequenceStart(anchor, TagName.Empty, true, Flow(node) ? SequenceStyle.Flow : SequenceStyle.Block));
+                foreach (Byml value in node.AsArray) Emit(e, value, anchors);
                 e.Emit(new SequenceEnd());
                 break;
 
             case BymlType.HashMap32 or BymlType.HashMap64:
                 string tag = node.Type is BymlType.HashMap32 ? "!h32" : "!h64";
-                e.Emit(new MappingStart(AnchorName.Empty, new TagName(tag), false, Flow(node) ? MappingStyle.Flow : MappingStyle.Block));
+                e.Emit(new MappingStart(anchor, new TagName(tag), false, Flow(node) ? MappingStyle.Flow : MappingStyle.Block));
                 foreach (var (key, value) in node.AsHashMap)
                 {
                     Plain(e, $"0x{key:X}");
-                    Emit(e, value);
+                    Emit(e, value, anchors);
                 }
                 e.Emit(new MappingEnd());
                 break;
@@ -73,14 +110,20 @@ internal static partial class BymlYaml
             case BymlType.Bool: Plain(e, node.Bool ? "true" : "false"); break;
             case BymlType.Int: Plain(e, node.Int.ToString(CultureInfo.InvariantCulture)); break;
             case BymlType.UInt: Tagged(e, "!u", $"0x{node.UInt:X}"); break;
-            case BymlType.Int64: Tagged(e, "!l", node.Int64.ToString(CultureInfo.InvariantCulture)); break;
-            case BymlType.UInt64: Tagged(e, "!ul", $"0x{node.UInt64:X}"); break;
+            case BymlType.Int64: Tagged(e, "!l", node.Int64.ToString(CultureInfo.InvariantCulture), anchor); break;
+            case BymlType.UInt64: Tagged(e, "!ul", $"0x{node.UInt64:X}", anchor); break;
+            case BymlType.Float when BitConverter.SingleToUInt32Bits(node.Float) is var bits && float.IsNaN(node.Float) && bits != QuietNaN:
+                Tagged(e, "!nan", $"0x{bits:X8}");
+                break;
+            case BymlType.Double when BitConverter.DoubleToUInt64Bits(node.Double) is var bits && double.IsNaN(node.Double) && bits != QuietNaN64:
+                Tagged(e, "!nan64", $"0x{bits:X16}", anchor);
+                break;
             case BymlType.Float: Plain(e, FormatReal(node.Float.ToString("R", CultureInfo.InvariantCulture))); break;
-            case BymlType.Double: Tagged(e, "!f64", FormatReal(node.Double.ToString("R", CultureInfo.InvariantCulture))); break;
-            case BymlType.Binary: Tagged(e, BinaryTag, Convert.ToBase64String(node.Binary)); break;
+            case BymlType.Double: Tagged(e, "!f64", FormatReal(node.Double.ToString("R", CultureInfo.InvariantCulture)), anchor); break;
+            case BymlType.Binary: Tagged(e, BinaryTag, Convert.ToBase64String(node.Binary), anchor); break;
 
             case BymlType.BinaryAligned:
-                e.Emit(new MappingStart(AnchorName.Empty, new TagName("!binary_aligned"), false, MappingStyle.Flow));
+                e.Emit(new MappingStart(anchor, new TagName("!binary_aligned"), false, MappingStyle.Flow));
                 Plain(e, "Alignment");
                 Plain(e, $"0x{node.BinaryAlignment:X}");
                 Plain(e, "Data");
@@ -102,8 +145,8 @@ internal static partial class BymlYaml
     private static void Plain(IEmitter e, string value)
         => e.Emit(new Scalar(AnchorName.Empty, TagName.Empty, value, ScalarStyle.Plain, true, false));
 
-    private static void Tagged(IEmitter e, string tag, string value)
-        => e.Emit(new Scalar(AnchorName.Empty, new TagName(tag), value, ScalarStyle.Plain, false, false));
+    private static void Tagged(IEmitter e, string tag, string value, AnchorName anchor = default)
+        => e.Emit(new Scalar(anchor, new TagName(tag), value, ScalarStyle.Plain, false, false));
 
     private static void Text(IEmitter e, string value)
     {
@@ -124,14 +167,25 @@ internal static partial class BymlYaml
 
     // ---- reading ----------------------------------------------------------
 
-    private static Byml Parse(IParser p)
+    private static Byml Parse(IParser p, Dictionary<string, Byml> anchors)
+    {
+        if (p.TryConsume<AnchorAlias>(out AnchorAlias? alias))
+            return anchors.TryGetValue(alias.Value.Value, out Byml? shared) ? shared : throw Error(alias, $"unknown alias {alias.Value.Value}");
+
+        AnchorName anchor = p.Accept<NodeEvent>(out NodeEvent? start) ? start.Anchor : AnchorName.Empty;
+        Byml node = ParseNode(p, anchors);
+        if (!anchor.IsEmpty) anchors[anchor.Value] = node;
+        return node;
+    }
+
+    private static Byml ParseNode(IParser p, Dictionary<string, Byml> anchors)
     {
         if (p.TryConsume<Scalar>(out Scalar? scalar)) return FromScalar(scalar);
 
         if (p.TryConsume<SequenceStart>(out _))
         {
             List<Byml> array = [];
-            while (!p.TryConsume<SequenceEnd>(out _)) array.Add(Parse(p));
+            while (!p.TryConsume<SequenceEnd>(out _)) array.Add(Parse(p, anchors));
             return Byml.Array(array);
         }
 
@@ -143,7 +197,7 @@ internal static partial class BymlYaml
                 case "":
                     Dictionary<string, Byml> entries = new(StringComparer.Ordinal);
                     while (!p.TryConsume<MappingEnd>(out _))
-                        entries[p.Consume<Scalar>().Value] = Parse(p);
+                        entries[p.Consume<Scalar>().Value] = Parse(p, anchors);
                     return Byml.Map(entries);
 
                 case "!h32" or "!h64":
@@ -151,7 +205,7 @@ internal static partial class BymlYaml
                     while (!p.TryConsume<MappingEnd>(out _))
                     {
                         Scalar key = p.Consume<Scalar>();
-                        hashes[Integer(key.Value) ?? throw Error(key, "hash map keys must be integers")] = Parse(p);
+                        hashes[Integer(key.Value) ?? throw Error(key, "hash map keys must be integers")] = Parse(p, anchors);
                     }
                     return Byml.HashMap(hashes, tag == "!h64");
 
@@ -184,9 +238,11 @@ internal static partial class BymlYaml
         return s.Tag.Value switch
         {
             "!u" => Byml.From(checked((uint)(Integer(v) ?? throw Error(s, "expected an integer")))),
-            "!l" => Byml.From(Signed(v) ?? throw Error(s, "expected an integer")),
+            "!l" or "!sl" => Byml.From(Signed(v) ?? throw Error(s, "expected an integer")),
             "!ul" => Byml.From(Integer(v) ?? throw Error(s, "expected an integer")),
             "!f64" => Byml.From(Real(v) ?? throw Error(s, "expected a number")),
+            "!nan" => Byml.From(BitConverter.UInt32BitsToSingle(checked((uint)(Integer(v) ?? throw Error(s, "expected the NaN's bits"))))),
+            "!nan64" => Byml.From(BitConverter.UInt64BitsToDouble(Integer(v) ?? throw Error(s, "expected the NaN's bits"))),
             BinaryTag => Byml.From(Convert.FromBase64String(Strip(v))),
             "tag:yaml.org,2002:str" or "!" => Byml.From(v),
             "tag:yaml.org,2002:null" => Byml.Null,
@@ -204,6 +260,8 @@ internal static partial class BymlYaml
         if (v is "true" or "True" or "TRUE") return Byml.From(true);
         if (v is "false" or "False" or "FALSE") return Byml.From(false);
 
+        if (Hex(v) && Integer(v) is ulong bits)
+            return bits <= uint.MaxValue ? Byml.From(unchecked((int)(uint)bits)) : Byml.From(unchecked((long)bits));
         if (Signed(v) is long l) return l is >= int.MinValue and <= int.MaxValue ? Byml.From((int)l) : Byml.From(l);
         if (Integer(v) is ulong u) return Byml.From(u);
         if (FloatPattern().IsMatch(v) && Single(v) is float f) return Byml.From(f);
@@ -216,9 +274,13 @@ internal static partial class BymlYaml
         if (negative || v.StartsWith('+')) v = v[1..];
         if (v.StartsWith('-') || v.StartsWith('+')) return null;
         if (Integer(v) is not ulong magnitude) return null;
+        if (!negative && Hex(v)) return unchecked((long)magnitude);
         if (negative) return magnitude <= (ulong)long.MaxValue + 1 ? unchecked(-(long)magnitude) : null;
         return magnitude <= long.MaxValue ? (long)magnitude : null;
     }
+
+    // Hex is a bit pattern, so it reads as two's complement: 0xFFFFFFFF is Int -1, !l 0xFFFFFFFFFFFFFFFF is -1.
+    private static bool Hex(string v) => v.StartsWith("0x") || v.StartsWith("+0x");
 
     private static ulong? Integer(string v)
     {
@@ -232,17 +294,24 @@ internal static partial class BymlYaml
         return v.Length > 0 && char.IsAsciiDigit(v[0]) && ulong.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out ulong dec) ? dec : null;
     }
 
+    private const uint QuietNaN = 0x7FC00000;
+    private const ulong QuietNaN64 = 0x7FF8000000000000;
+
     private static double? Real(string v) => v switch
     {
-        ".nan" or ".NaN" or ".NAN" => double.NaN,
+        ".nan" or ".NaN" or ".NAN" => BitConverter.UInt64BitsToDouble(QuietNaN64),
         ".inf" or ".Inf" or ".INF" or "+.inf" or "+.Inf" or "+.INF" => double.PositiveInfinity,
         "-.inf" or "-.Inf" or "-.INF" => double.NegativeInfinity,
         _ => double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) ? d : null,
     };
 
-    private static float? Single(string v) => Real(v) is double d
-        ? double.IsFinite(d) ? float.Parse(v, NumberStyles.Float, CultureInfo.InvariantCulture) : (float)d
-        : null;
+    private static float? Single(string v) => Real(v) switch
+    {
+        null => null,
+        double d when double.IsNaN(d) => BitConverter.UInt32BitsToSingle(QuietNaN),
+        double d when double.IsFinite(d) => float.Parse(v, NumberStyles.Float, CultureInfo.InvariantCulture),
+        double d => (float)d,
+    };
 
     private static string Strip(string base64) => string.Concat(base64.Where(c => !char.IsWhiteSpace(c)));
 

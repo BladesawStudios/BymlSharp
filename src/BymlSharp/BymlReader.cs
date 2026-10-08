@@ -32,27 +32,138 @@ internal static class BymlReader
 
         // A document whose root offset is zero holds nothing at all, which is legal.
         Byml node = root == 0 ? Byml.Null : ReadNode(c, t, root, TypeAt(c, root));
-        return new BymlFile(node, version, big) { ShareIdenticalContainers = t.Shared };
+
+        if (node.IsContainer)
+        {
+            int tablesEnd = Math.Max(TableEnd(c, keyTable), TableEnd(c, stringTable));
+            new Replay(big).Walk(data, node, (Math.Max(tablesEnd, HeaderSize) + 3) & ~3);
+        }
+
+        return new BymlFile(node, version, big);
     }
+
+    private static int TableEnd(in Cursor c, int offset)
+        => offset == 0 ? 0 : offset + c.I32(offset + ContainerHeaderSize + CountAt(c, offset) * 4);
 
     private sealed class Tables(string[] keys, string[] strings)
     {
-        private readonly HashSet<int> _containers = [];
-
         public string[] Keys { get; } = keys;
         public string[] Strings { get; } = strings;
 
-        public bool Shared { get; private set; }
+        // Offsets referenced from several places are one node, shared.
+        public Dictionary<(int Offset, BymlType Type), Byml> Nodes { get; } = [];
 
         public int FirstValue { get; set; } = int.MaxValue;
 
         public int LastNodeFirstValue { get; set; } = int.MaxValue;
+    }
 
-        public bool Visit(int offset)
+    // The value section holds every out-of-line value in the order the writer meets them: map entries in
+    // insertion order, each container once. The order the offsets suggest is usually that order; where a
+    // value is shared the pointers name its last copy instead, so walk the section the way the writer
+    // fills it and take, at each step, the first entry whose values are the bytes found there.
+    private sealed class Replay(bool big)
+    {
+        private readonly HashSet<Byml> _visited = new(ReferenceEqualityComparer.Instance);
+        private readonly List<Byml> _visitOrder = [];
+        private int _position;
+
+        public bool Walk(ReadOnlySpan<byte> data, Byml root, int start)
         {
-            if (_containers.Add(offset)) return true;
-            Shared = true;
-            return false;
+            _position = start;
+            return Container(data, root);
+        }
+
+        private bool Container(ReadOnlySpan<byte> data, Byml node)
+        {
+            if (!_visited.Add(node)) return true;
+            _visitOrder.Add(node);
+
+            if (node.IsMap) return Map(data, node);
+            foreach (Byml child in BymlWriter.PlacementOrder(node))
+                if (!Child(data, child)) return false;
+            return true;
+        }
+
+        private bool Child(ReadOnlySpan<byte> data, Byml child)
+            => child.IsContainer ? Container(data, child) : BymlWriter.IsInline(child.Type) || Value(data, child);
+
+        private bool Map(ReadOnlySpan<byte> data, Byml node)
+        {
+            var entries = node.AsMap.ToList();
+            int[] slots = [.. Enumerable.Range(0, entries.Count).Where(i => !BymlWriter.IsInline(entries[i].Value.Type))];
+            List<KeyValuePair<string, Byml>> remaining = [.. slots.Select(i => entries[i])];
+            List<KeyValuePair<string, Byml>> chosen = new(slots.Length);
+
+            while (remaining.Count > 0)
+            {
+                int pick = -1;
+                for (int i = 0; i < remaining.Count; i++)
+                {
+                    (int position, int visits) = (_position, _visitOrder.Count);
+                    if (Child(data, remaining[i].Value))
+                    {
+                        pick = i;
+                        break;
+                    }
+
+                    _position = position;
+                    for (int v = _visitOrder.Count - 1; v >= visits; v--) _visited.Remove(_visitOrder[v]);
+                    _visitOrder.RemoveRange(visits, _visitOrder.Count - visits);
+                }
+
+                if (pick < 0) return false;
+                chosen.Add(remaining[pick]);
+                remaining.RemoveAt(pick);
+            }
+
+            if (slots.Select((slot, i) => entries[slot].Key == chosen[i].Key).All(same => same)) return true;
+
+            for (int i = 0; i < slots.Length; i++) entries[slots[i]] = chosen[i];
+            IDictionary<string, Byml> map = node.AsMap;
+            map.Clear();
+            foreach (var (key, value) in entries) map.Add(key, value);
+            return true;
+        }
+
+        private bool Value(ReadOnlySpan<byte> data, Byml node)
+        {
+            int at = _position;
+            switch (node.Type)
+            {
+                case BymlType.Int64 or BymlType.UInt64 or BymlType.Double:
+                    at = (at + 3) & ~3;
+                    if (at + 8 > data.Length) return false;
+                    long bits = big ? BinaryPrimitives.ReadInt64BigEndian(data[at..]) : BinaryPrimitives.ReadInt64LittleEndian(data[at..]);
+                    long expected = node.Type switch
+                    {
+                        BymlType.Int64 => node.Int64,
+                        BymlType.UInt64 => unchecked((long)node.UInt64),
+                        _ => BitConverter.DoubleToInt64Bits(node.Double),
+                    };
+                    if (bits != expected) return false;
+                    _position = at + 8;
+                    return true;
+
+                case BymlType.Binary or BymlType.BinaryAligned:
+                    int header = 4;
+                    if (node.Type is BymlType.BinaryAligned)
+                    {
+                        header = 8;
+                        int alignment = node.BinaryAlignment;
+                        if (alignment > 1) at = (at + header + alignment - 1) / alignment * alignment - header;
+                    }
+
+                    byte[] payload = node.Binary;
+                    if (at + header + payload.Length > data.Length) return false;
+                    int size = big ? BinaryPrimitives.ReadInt32BigEndian(data[at..]) : BinaryPrimitives.ReadInt32LittleEndian(data[at..]);
+                    if (size != payload.Length || !data.Slice(at + header, size).SequenceEqual(payload)) return false;
+                    _position = at + header + size;
+                    return true;
+
+                default:
+                    return false;
+            }
         }
     }
 
@@ -85,25 +196,32 @@ internal static class BymlReader
     {
         if (type is BymlType.Map or BymlType.Array or BymlType.HashMap32 or BymlType.HashMap64)
         {
-            bool first = t.Visit(value);
+            if (t.Nodes.TryGetValue((value, type), out Byml? shared))
+            {
+                t.LastNodeFirstValue = int.MaxValue;
+                return shared;
+            }
+
             int outer = t.FirstValue;
             t.FirstValue = int.MaxValue;
             Byml node = ReadValue(c, t, value, type);
-            t.LastNodeFirstValue = first ? t.FirstValue : int.MaxValue;
-            t.FirstValue = first ? Math.Min(outer, t.FirstValue) : outer;
+            t.Nodes[(value, type)] = node;
+            t.LastNodeFirstValue = t.FirstValue;
+            t.FirstValue = Math.Min(outer, t.FirstValue);
             return node;
         }
 
         if (BymlWriter.IsInline(type))
         {
             t.LastNodeFirstValue = int.MaxValue;
+            return ReadValue(c, t, value, type);
         }
-        else
-        {
-            t.LastNodeFirstValue = value;
-            t.FirstValue = Math.Min(t.FirstValue, value);
-        }
-        return ReadValue(c, t, value, type);
+
+        t.LastNodeFirstValue = value;
+        t.FirstValue = Math.Min(t.FirstValue, value);
+        if (!t.Nodes.TryGetValue((value, type), out Byml? same))
+            t.Nodes[(value, type)] = same = ReadValue(c, t, value, type);
+        return same;
     }
 
     private static Byml ReadValue(in Cursor c, Tables t, int value, BymlType type)

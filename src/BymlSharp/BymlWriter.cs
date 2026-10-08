@@ -26,18 +26,20 @@ internal static class BymlWriter
         int keyTable = WriteStringTable(buffer, keys);
         int stringTable = WriteStringTable(buffer, strings);
 
+        // A container that appears in several places is written once; with shareIdenticalContainers,
+        // so is any container equal to one already written.
+        IEqualityComparer<Byml> sharing = shareIdenticalContainers ? ContentComparer.Instance : ReferenceEqualityComparer.Instance;
+
         int rootOffset = 0;
         if (root.IsContainer)
         {
             buffer.Align(4);
-            Dictionary<(Byml Parent, int Slot), int> values = [];
-            WriteValues(buffer, root, values, shareIdenticalContainers ? new(ContentComparer.Instance) : null);
+            Dictionary<Byml, int> values = new(ReferenceEqualityComparer.Instance);
+            WriteValues(buffer, root, values, new(sharing));
 
             buffer.Align(4);
             rootOffset = buffer.Length;
-            Placement placement = new(keyIndex, stringIndex, values,
-                shareIdenticalContainers ? new(ContentComparer.Instance) : null);
-            WriteContainer(buffer, root, placement);
+            WriteContainer(buffer, root, new Placement(keyIndex, stringIndex, values, new(sharing)));
         }
         else if (!root.IsNull)
         {
@@ -119,19 +121,19 @@ internal static class BymlWriter
         buffer.AddU24(count);
     }
 
-    private static IEnumerable<Byml> PlacementOrder(Byml node) => node.Type switch
+    internal static IEnumerable<Byml> PlacementOrder(Byml node) => node.Type switch
     {
         BymlType.Map => node.AsMap.Values,
         BymlType.Array => node.AsArray,
         _ => node.AsHashMap.OrderBy(e => e.Key).Select(e => e.Value),
     };
 
-    private static void WriteValues(
-        Buffer buffer, Byml node, Dictionary<(Byml Parent, int Slot), int> offsets, HashSet<Byml>? visited)
+    // Every appearance of a value is written, and all of them point at the last copy: what Nintendo's
+    // writer does with a value node shared between several places.
+    private static void WriteValues(Buffer buffer, Byml node, Dictionary<Byml, int> offsets, HashSet<Byml> visited)
     {
-        if (visited is not null && !visited.Add(node)) return;
+        if (!visited.Add(node)) return;
 
-        int slot = 0;
         foreach (Byml child in PlacementOrder(node))
         {
             if (child.IsContainer)
@@ -142,27 +144,26 @@ internal static class BymlWriter
             {
                 if (child.Type is BymlType.BinaryAligned) buffer.AlignPayload(8, child.BinaryAlignment);
                 else if (child.Type is not BymlType.Binary) buffer.Align(4);
-                offsets[(node, slot)] = buffer.Length;
+                offsets[child] = buffer.Length;
                 WriteOutOfLine(buffer, child);
             }
-            slot++;
         }
     }
 
     private sealed record Placement(
         Dictionary<string, int> Keys, Dictionary<string, int> Strings,
-        Dictionary<(Byml Parent, int Slot), int> Values, Dictionary<Byml, int>? Placed);
+        Dictionary<Byml, int> Values, Dictionary<Byml, int> Placed);
 
     private static void WriteContainer(Buffer buffer, Byml node, Placement at)
     {
         List<(int Patch, Byml Node)> staged = [];
         Dictionary<string, int> keys = at.Keys;
 
-        void WriteChild(Byml child, int slot, int patchAt)
+        void WriteChild(Byml child, int patchAt)
         {
             if (Inline(buffer, child, at.Strings, patchAt)) return;
             if (child.IsContainer) staged.Add((patchAt, child));
-            else buffer.SetI32(patchAt, at.Values[(node, slot)]);
+            else buffer.SetI32(patchAt, at.Values[child]);
         }
 
         switch (node.Type)
@@ -181,9 +182,8 @@ internal static class BymlWriter
                     buffer.AddI32(0);
                 }
 
-                int slot = 0;
                 foreach ((string key, Byml child) in node.AsMap)
-                    WriteChild(child, slot++, patches[key]);
+                    WriteChild(child, patches[key]);
                 break;
             }
 
@@ -199,7 +199,7 @@ internal static class BymlWriter
                 {
                     int patch = buffer.Length;
                     buffer.AddI32(0);
-                    WriteChild(items[slot], slot, patch);
+                    WriteChild(items[slot], patch);
                 }
                 break;
             }
@@ -219,7 +219,7 @@ internal static class BymlWriter
 
                     int patch = buffer.Length;
                     buffer.AddI32(0);
-                    WriteChild(child, slot, patch);
+                    WriteChild(child, patch);
                 }
 
                 foreach ((_, Byml child) in entries) buffer.AddU8((byte)child.Type);
@@ -234,7 +234,7 @@ internal static class BymlWriter
         // Child containers follow their parent, each one's own children before the next sibling.
         foreach ((int patch, Byml child) in staged)
         {
-            if (at.Placed is not null && at.Placed.TryGetValue(child, out int existing))
+            if (at.Placed.TryGetValue(child, out int existing))
             {
                 buffer.SetI32(patch, existing);
                 continue;
@@ -242,7 +242,7 @@ internal static class BymlWriter
 
             buffer.Align(4);
             buffer.SetI32(patch, buffer.Length);
-            at.Placed?.Add(child, buffer.Length);
+            at.Placed.Add(child, buffer.Length);
             WriteContainer(buffer, child, at);
         }
     }
