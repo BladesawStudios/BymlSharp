@@ -32,6 +32,15 @@ public sealed class Byml
     public void ToFile(string path, int version = BymlVersion.Default, bool bigEndian = false)
         => File.WriteAllBytes(path, ToBinary(version, bigEndian));
 
+    // ---- yaml -------------------------------------------------------------
+    public static Byml FromYaml(string yaml) => BymlYaml.Read(yaml);
+
+    public static Byml FromYamlFile(string path) => FromYaml(File.ReadAllText(path));
+
+    public string ToYaml() => BymlYaml.Write(this);
+
+    public void ToYamlFile(string path) => File.WriteAllText(path, ToYaml());
+
     // ---- building ---------------------------------------------------------
     public static Byml Map(IDictionary<string, Byml>? entries = null)
         => new(BymlType.Map, entries as Dictionary<string, Byml>
