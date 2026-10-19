@@ -1,0 +1,9 @@
+[submodule "lib/SarcSharp"]
+	path = lib/SarcSharp
+	url = https://github.com/BladesawStudios/SarcSharp
+[submodule "lib/Yaz0Sharp"]
+	path = lib/Yaz0Sharp
+	url = https://github.com/BladesawStudios/Yaz0Sharp
+[submodule "lib/ZsDicSharp"]
+	path = lib/ZsDicSharp
+	url = https://github.com/BladesawStudios/ZsDicSharp
