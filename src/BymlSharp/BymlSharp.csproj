@@ -16,4 +16,9 @@
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="BymlSharp.Tests" />
+    <InternalsVisibleTo Include="BymlSharp.Bench" />
+  </ItemGroup>
+
 </Project>
