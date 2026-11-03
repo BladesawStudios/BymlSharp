@@ -10,7 +10,7 @@ dotnet build BymlSharp.sln -c Release
 
 ## Performance
 
-Measured on a Ryzen 9 9900X3D with 31 GB of RAM, .NET 10.0.302, Release build, one thread. Files come from a
+Measured on a Ryzen 9 9900X3D with 32 GB of RAM, .NET 10.0.302, Release build, one thread. Files come from a
 Tears of the Kingdom 1.2.1 romfs dump. Each figure is the median of 7 to 9 timed runs after warm-up, taken with
 `GC.Collect()` between runs. "Before" is the library before the optimization work, run through the same harness
 on the same files. Every file in every set still rewrites byte for byte.
