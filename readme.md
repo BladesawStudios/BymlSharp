@@ -10,8 +10,8 @@ dotnet build BymlSharp.sln -c Release
 
 ## Performance
 
-Measured on a Ryzen 9 9900X3D with 32 GB of RAM, .NET 10.0.302, Release build, one thread. Files come from a
-Tears of the Kingdom 1.2.1 romfs dump. Each figure is the median of 7 to 9 timed runs after warm-up, taken with
+Measured on a Ryzen 9 9900X3D with 32 GB of RAM, .NET 10, Release build, one thread. Files come from a
+TotK 121 romfs dump. Each figure is the median of 7 to 9 timed runs after warm-up, taken with
 `GC.Collect()` between runs. "Before" is the library before the optimization work, run through the same harness
 on the same files. Every file in every set still rewrites byte for byte.
 
@@ -48,24 +48,6 @@ on the same files. Every file in every set still rewrites byte for byte.
 |---|---|---|---|
 | Read | 83.1 ms | 79.6 ms | 1.0x |
 | Write | 106.0 ms | 63.5 ms | 1.7x |
-
-### Notes
-
-- YAML output is character for character the text the previous implementation produced. Unusual input falls
-  back to the previous YamlDotNet code, which is slower: multi-line strings, block scalars, keys over 128
-  characters and uncommon tags.
-- The full TotK corpus round trip test (about 470,000 documents, binary and YAML) went from 3 min 50 s to
-  1 min 31 s.
-
-### Reproducing
-
-```bash
-dotnet run -c Release --project tests/BymlSharp.Bench -- <romfs root> bcett --limit 3000 --yaml
-```
-
-The first argument after the romfs root is a path filter. `--limit`, `--iters`, `--yaml` and `--only read|write|toyaml|fromyaml`
-are optional. `--yamlcheck` compares the YAML writer and reader against the YamlDotNet implementation on the
-selected files. Building the benchmark needs the submodules in `lib/`.
 
 ## Licence
 
