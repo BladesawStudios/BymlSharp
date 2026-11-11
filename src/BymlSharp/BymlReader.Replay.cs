@@ -4,14 +4,8 @@ namespace BymlSharp;
 
 internal static partial class BymlReader
 {
-    // The value section holds every out-of-line value in the order the writer meets them: map entries in
-    // insertion order, each container once. The order the offsets suggest is usually that order; where a
-    // value is shared the pointers name its last copy instead, so walk the section the way the writer
-    // fills it and take, at each step, the first entry whose values are the bytes found there.
     private sealed class Replay(bool big)
     {
-        // Each container visited takes the next stamp. Backing out of a failed attempt kills the stamps issued
-        // since it began instead of unmarking those containers one by one, and visits are rarely backed out.
         private int _stamp;
         private List<(int After, int Through)>? _undone;
         private int _position;
@@ -64,8 +58,6 @@ internal static partial class BymlReader
         {
             Dictionary<string, Byml> map = (Dictionary<string, Byml>)node.AsMap;
 
-            // Nearly every map is already in the order it was written, so try that order first and only
-            // fall back to searching for one when a value isn't where the walk expects it.
             (int start, int started) = (_position, _stamp);
             bool ordered = true;
             foreach (KeyValuePair<string, Byml> entry in map)
@@ -116,7 +108,6 @@ internal static partial class BymlReader
 
                 if (inOrder) return true;
 
-                // Slots are the positions of the out-of-line entries; they receive the chosen entries in order.
                 var reordered = new KeyValuePair<string, Byml>[map.Count];
                 Array.Copy(entries, reordered, map.Count);
                 int slot = 0;

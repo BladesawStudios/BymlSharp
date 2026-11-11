@@ -106,9 +106,6 @@ internal static partial class BymlYamlReader
             "tag:yaml.org,2002:str" or "!" => Byml.From(v),
             _ => throw new Unsupported(),
         };
-
-        // An untagged plain scalar, typed by the YAML core schema (see BymlYamlLegacy.Resolve, whose answers
-        // these shortcuts must match).
         private Byml Resolve(ReadOnlySpan<char> v)
         {
             if (v.Length == 0) return Byml.Null;
@@ -136,7 +133,6 @@ internal static partial class BymlYamlReader
             return Byml.From(Intern(v));
         }
 
-        // Plain decimal integers and reals; null for everything else (hex, octal, .inf, strings, odd sizes).
         private static Byml? Number(ReadOnlySpan<char> v)
         {
             int i = 0;

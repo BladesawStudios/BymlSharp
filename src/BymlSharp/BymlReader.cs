@@ -30,7 +30,6 @@ internal static partial class BymlReader
 
         Tables t = new(ReadStringTable(c, keyTable), ReadStringTable(c, stringTable), data.Length);
 
-        // A document whose root offset is zero holds nothing at all, which is legal.
         Byml node = root == 0 ? Byml.Null : ReadNode(c, t, root, TypeAt(c, root));
 
         if (node.IsContainer)
@@ -53,10 +52,6 @@ internal static partial class BymlReader
         public string[] Keys { get; } = keys;
         public string[] Strings { get; } = strings;
 
-        // Offsets referenced from several places are one node, shared. Nodes sit four-byte aligned almost
-        // always, so a slot per four bytes of the document finds them without hashing; pages of slots are
-        // allocated as nodes land in them. The rest, and a second type at an offset already taken, fall back
-        // to a dictionary.
         private readonly Byml?[]?[] _pages = new Byml?[]?[(length >> (2 + PageBits)) + 1];
         private Dictionary<long, Byml>? _overflow;
 
@@ -113,7 +108,6 @@ internal static partial class BymlReader
             int start = offset + c.I32(offset + ContainerHeaderSize + i * 4);
             int end = offset + c.I32(offset + ContainerHeaderSize + (i + 1) * 4);
 
-            // The stored strings are null terminated as well as delimited.
             ReadOnlySpan<byte> span = c.Slice(start, Math.Max(end - start, 0));
             int nul = span.IndexOf((byte)0);
             table[i] = Encoding.UTF8.GetString(nul >= 0 ? span[..nul] : span);

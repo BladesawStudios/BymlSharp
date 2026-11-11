@@ -1,8 +1,5 @@
 namespace BymlSharp;
 
-// Parts of a document's layout that YAML text can't say without anchors: which nodes are one shared instance,
-// and the alignment of binary blobs. They are copied from the document the text came from, to wherever the
-// edited document still has the same content at the same path.
 internal static class BymlSharing
 {
     public static void Adopt(Byml root, Byml template)
@@ -16,7 +13,6 @@ internal static class BymlSharing
         }
     }
 
-    // Every appearance of each node that is shared, or that is an aligned binary, keyed by the node in the template.
     private static Dictionary<Byml, List<object[]>> Collect(Byml template)
     {
         HashSet<Byml> seen = new(ReferenceEqualityComparer.Instance);
@@ -51,7 +47,6 @@ internal static class BymlSharing
             paths.Add([.. path]);
         }
 
-        // A node that appears again has the same children, so they are only walked once.
         if (!node.IsContainer || !descended.Add(node)) return;
 
         switch (node.Type)

@@ -2,7 +2,6 @@ namespace BymlSharp;
 
 internal static partial class BymlReader
 {
-    // Larger scratch buffers go on the heap, so a hostile document can't overflow the stack.
     private const int StackLimit = 128;
 
     private struct MapEntry
@@ -47,7 +46,6 @@ internal static partial class BymlReader
                 e.FirstValue = t.LastNodeFirstValue;
             }
 
-            // Out-of-line entries by offset: containers and plain values each sorted, then merged.
             int containers = 0, values = 0;
             for (int i = 0; i < count; i++)
             {
@@ -90,7 +88,6 @@ internal static partial class BymlReader
                 merged[m++] = containerFirst ? (int)containerKeys[ci++] : (int)valueKeys[vi++];
             }
 
-            // The merged entries fill the out-of-line positions in turn; inline entries stay where they are.
             m = 0;
             for (int i = 0; i < count; i++)
             {

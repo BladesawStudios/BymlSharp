@@ -29,10 +29,6 @@ public sealed class BymlFile(Byml root, int version = BymlVersion.Default, bool 
 
     public static BymlFile FromFile(string path) => FromBinary(File.ReadAllBytes(path));
 
-    /// <summary>
-    /// A document from YAML text. Given the file the text was made from, it also takes that file's version, byte
-    /// order and layout (see <see cref="AdoptLayoutFrom"/>), so unedited text writes back the original bytes.
-    /// </summary>
     public static BymlFile FromYaml(string yaml, BymlFile? original = null)
     {
         BymlFile file = new(Byml.FromYaml(yaml));
@@ -40,11 +36,6 @@ public sealed class BymlFile(Byml root, int version = BymlVersion.Default, bool 
         return file;
     }
 
-    /// <summary>
-    /// Takes the original's version, byte order and writer settings, and shares the nodes the original shared,
-    /// and aligns the binary blobs it aligned, wherever this document still has the same content at the same
-    /// place. YAML without anchors can't say any of that. Edited parts that no longer match stay as they are.
-    /// </summary>
     public void AdoptLayoutFrom(BymlFile original)
     {
         ArgumentNullException.ThrowIfNull(original);

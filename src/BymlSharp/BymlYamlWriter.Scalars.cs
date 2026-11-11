@@ -105,7 +105,6 @@ internal static partial class BymlYamlWriter
             _length += written;
         }
 
-        // The shortest round-trip text, written the way YAML wants a real number: "1.0", ".inf", "1.0E+20".
         private void Real(ReadOnlySpan<char> text)
         {
             if (text is "NaN") Add(".nan");
@@ -153,7 +152,6 @@ internal static partial class BymlYamlWriter
             Add(Quote(value, isKey, flow));
         }
 
-        // Words made only of characters no emitter would ever quote on their own account.
         private static bool Plain(string value, out bool resolvesToString)
         {
             resolvesToString = true;
@@ -173,7 +171,6 @@ internal static partial class BymlYamlWriter
             }
             else if (value.Length <= 5)
             {
-                // Words the core schema reads as null or a bool are written in quotes to stay strings.
                 resolvesToString = value is not ("null" or "Null" or "NULL" or "true" or "True" or "TRUE" or "false" or "False" or "FALSE");
             }
             return true;
@@ -181,8 +178,6 @@ internal static partial class BymlYamlWriter
 
         private static readonly ConcurrentDictionary<(string Value, bool IsKey, bool Flow), string> s_quoted = new();
 
-        // What YamlDotNet's emitter writes for a string that isn't a plain word: anything it would quote, escape
-        // or leave plain by rules this class doesn't repeat. Single-line results only.
         private static string Quote(string value, bool isKey, bool flow)
         {
             if (s_quoted.TryGetValue((value, isKey, flow), out string? known)) return known;
@@ -202,15 +197,12 @@ internal static partial class BymlYamlWriter
             emitter.Emit(new DocumentEnd(true));
             emitter.Emit(new StreamEnd());
 
-            // "key: v", "{key: v}" or the reverse; the part that isn't `v` is the string.
             string rendered = writer.ToString().TrimEnd('\r', '\n');
             if (flow) rendered = rendered[1..^1];
             string quoted = isKey
                 ? rendered.EndsWith(": v", StringComparison.Ordinal) ? rendered[..^3] : throw new Unsupported()
                 : rendered.StartsWith("k: ", StringComparison.Ordinal) ? rendered[3..] : throw new Unsupported();
 
-            // Keys that don't fit on one line become "? " entries, and multi-line strings wrap in the
-            // reference emitter's own indentation: both are its to write.
             if (quoted.Contains('\n') || quoted.Contains('\r') || quoted.StartsWith("? ", StringComparison.Ordinal))
                 throw new Unsupported();
 

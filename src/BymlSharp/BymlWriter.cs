@@ -26,8 +26,6 @@ internal static partial class BymlWriter
         int keyTable = WriteStringTable(buffer, keys);
         int stringTable = WriteStringTable(buffer, strings);
 
-        // A container that appears in several places is written once; with shareIdenticalContainers,
-        // so is any container equal to one already written.
         IEqualityComparer<Byml> sharing = shareIdenticalContainers ? ContentComparer.Instance : ReferenceEqualityComparer.Instance;
 
         int rootOffset = 0;
@@ -47,7 +45,6 @@ internal static partial class BymlWriter
                 $"A BYML document's root must be a container or null, not {root.Type}.");
         }
 
-        // "YB" little, "BY" big.
         buffer.SetU8(0, (byte)(bigEndian ? 'B' : 'Y'));
         buffer.SetU8(1, (byte)(bigEndian ? 'Y' : 'B'));
         buffer.SetU16(0x02, (ushort)version);
@@ -73,7 +70,6 @@ internal static partial class BymlWriter
         return sorted;
     }
 
-    // How many nodes will need tracking, so the sets that follow them are sized once.
     private sealed class Census
     {
         public int Containers;
@@ -147,8 +143,6 @@ internal static partial class BymlWriter
         _ => node.AsHashMap.OrderBy(e => e.Key).Select(e => e.Value),
     };
 
-    // Every appearance of a value is written, and all of them point at the last copy: what Nintendo's
-    // writer does with a value node shared between several places.
     private static void WriteValues(Buffer buffer, Byml node, Dictionary<Byml, int> offsets, HashSet<Byml> visited)
     {
         if (!visited.Add(node)) return;

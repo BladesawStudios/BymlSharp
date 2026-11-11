@@ -4,12 +4,9 @@ namespace BymlSharp;
 
 public sealed class Byml
 {
-    // Reference payloads (string, byte[], containers) live in _ref; scalars live unboxed in _bits, so a
-    // document of numbers allocates one object per node. A BinaryAligned node keeps its alignment in _bits.
     private readonly object? _ref;
     private readonly long _bits;
 
-    // Scratch stamp for the reader's layout pass, which walks each freshly read tree once.
     internal int VisitStamp;
 
     private Byml(BymlType type, object? value, long bits = 0)
@@ -24,8 +21,6 @@ public sealed class Byml
     public static Byml Null { get; } = new(BymlType.Null, null);
 
     internal static Byml Of(BymlType type, object? value) => new(type, value);
-    // A string read from a document remembers its place in that document's string table; the writer tries the
-    // same place first, which a document written back unedited finds every time.
     internal static Byml OfString(string value, int tableIndex) => new(BymlType.String, value, tableIndex);
     internal int StringIndexHint => (int)_bits;
 
@@ -38,7 +33,6 @@ public sealed class Byml
     internal static Byml OfDouble(double value) => new(BymlType.Double, null, BitConverter.DoubleToInt64Bits(value));
     internal static Byml OfAligned(byte[] value, int alignment) => new(BymlType.BinaryAligned, value, alignment);
 
-    // The node's payload, boxed for comparison and hashing.
     internal object? Value => Type switch
     {
         BymlType.Int => Int,
@@ -68,12 +62,6 @@ public sealed class Byml
 
     public static Byml FromYamlFile(string path) => FromYaml(File.ReadAllText(path));
 
-    /// <summary>
-    /// Plain YAML that oead and other tools read, with every node written where it appears, so editing one copy of a
-    /// node that the binary shares leaves the others alone. With <paramref name="anchors"/>, a node the document
-    /// shares becomes a YAML anchor and aliases, which keeps the text self-contained but couples the copies: editing
-    /// the anchored one changes them all, and tools that don't resolve aliases read them as the string "*1".
-    /// </summary>
     public string ToYaml(bool anchors = false) => BymlYaml.Write(this, anchors);
 
     public void ToYamlFile(string path, bool anchors = false) => File.WriteAllText(path, ToYaml(anchors));
@@ -117,7 +105,6 @@ public sealed class Byml
     public bool IsHashMap => Type is BymlType.HashMap32 or BymlType.HashMap64;
     public bool IsContainer => IsMap || IsArray || IsHashMap;
 
-    // The containers themselves, for callers that already know the type and want no interface calls.
     internal Dictionary<string, Byml> MapEntries => (Dictionary<string, Byml>)_ref!;
     internal List<Byml> ArrayItems => (List<Byml>)_ref!;
     internal Dictionary<ulong, Byml> HashEntries => (Dictionary<ulong, Byml>)_ref!;

@@ -1,8 +1,5 @@
 namespace BymlSharp;
 
-// Reads the YAML this library writes and the forms editors keep it in: block and single-line flow collections,
-// plain and quoted scalars on one line, anchors, aliases, tags and comments. Anything else throws Unsupported
-// and the caller reads it with the YamlDotNet-based reader, which also has the last word on malformed input.
 internal static partial class BymlYamlReader
 {
     internal sealed class Unsupported : Exception;
@@ -11,10 +8,10 @@ internal static partial class BymlYamlReader
 
     private struct Line
     {
-        public int Start;   // where the content begins; moved right when a "- " or "key: " is read through
+        public int Start;
         public int End;
-        public int Indent;  // column of Start
-        public int Base;    // where the line begins in the text
+        public int Indent;
+        public int Base;
     }
 
     private enum Place { Root, MapValue, SeqItem }
@@ -86,8 +83,6 @@ internal static partial class BymlYamlReader
 
         private bool AtEnd(int i, int end) => i >= end || (_text[i] == '#' && i > 0 && _text[i - 1] == ' ');
 
-        // The value that starts at `i` on the current line and runs on to whatever lines belong to it.
-        // Afterwards _at is the first line that doesn't.
         private Byml Value(int i, Place place, int parentIndent)
         {
             int end = _lines[_at].End;
@@ -147,7 +142,6 @@ internal static partial class BymlYamlReader
             return node;
         }
 
-        // The rest of the line, from `i`, becomes a line of its own: how "- - 1" and "- key: 1" are read.
         private void Rebase(int i)
         {
             ref Line line = ref _lines[_at];
@@ -213,7 +207,6 @@ internal static partial class BymlYamlReader
             return hash ? Byml.HashMap(hashes, tag == "!h64") : Byml.Map(map);
         }
 
-        // Does a "key:" start at i? The colon must end the line or be followed by a space.
         private bool IsEntry(int i, int end)
         {
             char c = _text[i];
@@ -236,7 +229,6 @@ internal static partial class BymlYamlReader
             return false;
         }
 
-        // The index just past the quoted scalar that opens at i, or -1 if it doesn't close on this line.
         private int Quoted(int i, int end)
         {
             char quote = _text[i];
@@ -252,7 +244,6 @@ internal static partial class BymlYamlReader
             return -1;
         }
 
-        // Reads a mapping key and leaves i on its colon.
         private string Key(ref int i, int end)
         {
             string key;
@@ -310,8 +301,6 @@ internal static partial class BymlYamlReader
             return _anchors is not null && _anchors.TryGetValue(name, out Byml? shared) ? shared : throw new Unsupported();
         }
 
-        // Where a plain scalar ends: at the end of the line or its trailing comment, or in a flow collection
-        // at a delimiter. Trailing spaces are not part of it.
         private int PlainEnd(int i, int end, bool flow)
         {
             int j = i;

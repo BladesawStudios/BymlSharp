@@ -60,7 +60,6 @@ internal static partial class BymlYamlReader
             return hash ? Byml.HashMap(hashes, tag == "!h64") : Byml.Map(map);
         }
 
-        // {Alignment: 0x10, Data: !!binary AAEC}: the two scalars are read as text, whatever their tags.
         private Byml FlowAligned(ref int i, int end)
         {
             byte[]? data = null;

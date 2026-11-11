@@ -4,7 +4,6 @@ namespace BymlSharp;
 
 internal static partial class BymlYamlWriter
 {
-    // Nodes the tree shares get an anchor at their first appearance and an alias after it.
     private sealed class Names
     {
         private readonly HashSet<Byml> _shared = new(ReferenceEqualityComparer.Instance);
@@ -35,7 +34,6 @@ internal static partial class BymlYamlWriter
             }
         }
 
-        /// <summary>For a shared node: its alias once it has an anchor, or the anchor to write the first time.</summary>
         public bool Claim(Byml node, out string? anchor, out string? alias)
         {
             anchor = alias = null;

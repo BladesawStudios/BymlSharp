@@ -3,9 +3,6 @@ using System.Globalization;
 
 namespace BymlSharp;
 
-// Writes the text YamlDotNet's emitter would for a BYML tree, without building the events. Strings that need
-// more than the plainest quoting rules are rendered by YamlDotNet itself (see Quote) and anything the layout
-// below doesn't cover makes TryWrite return null, so the caller can use the reference emitter instead.
 internal static partial class BymlYamlWriter
 {
     private const int SimpleKeyLimit = 128;
@@ -82,7 +79,6 @@ internal static partial class BymlYamlWriter
             Value(root, 0, Place.Root);
         }
 
-        // The node sits after "key:" or "-" (or opens the document); `indent` is the column of that key or dash.
         private void Value(Byml node, int indent, Place place)
         {
             string? anchor = null;
@@ -142,7 +138,6 @@ internal static partial class BymlYamlWriter
             }
             EndLine();
 
-            // Sequences under a key sit level with it; everything else is indented two more.
             int childIndent = place switch
             {
                 Place.Root => indent,
@@ -152,7 +147,6 @@ internal static partial class BymlYamlWriter
             Block(node, childIndent, firstOnLine: false);
         }
 
-        // Small collections of plain scalars sit on one line: {X: 1.0, Y: 2.0}. Same rule as the reference emitter.
         private static bool IsFlow(Byml node)
         {
             switch (node.Type)

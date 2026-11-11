@@ -5,10 +5,6 @@ using YamlDotNet.Core.Events;
 
 namespace BymlSharp;
 
-// Tags follow oead: plain ints are Int, plain floats Float, !u UInt, !l (or !sl) Int64, !ul UInt64,
-// !f64 Double, !!binary Binary. Additions: !binary_aligned {Alignment, Data}, !h32 / !h64 hash maps,
-// anchors for nodes the document shares (one instance in several places), and !nan / !nan64 with the
-// bits of any NaN other than the quiet NaN that .nan stands for.
 internal static partial class BymlYamlLegacy
 {
     internal const string BinaryTag = "tag:yaml.org,2002:binary";
@@ -256,7 +252,6 @@ internal static partial class BymlYamlLegacy
         };
     }
 
-    // An untagged plain scalar, typed by the YAML core schema.
     internal static Byml Resolve(string v)
     {
         if (v is "" or "~" or "null" or "Null" or "NULL") return Byml.Null;
@@ -282,7 +277,6 @@ internal static partial class BymlYamlLegacy
         return magnitude <= long.MaxValue ? (long)magnitude : null;
     }
 
-    // Hex is a bit pattern, so it reads as two's complement: 0xFFFFFFFF is Int -1, !l 0xFFFFFFFFFFFFFFFF is -1.
     internal static bool Hex(string v) => v.StartsWith("0x") || v.StartsWith("+0x");
 
     internal static ulong? Integer(string v)

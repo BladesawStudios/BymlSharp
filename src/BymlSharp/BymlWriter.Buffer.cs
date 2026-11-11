@@ -6,7 +6,6 @@ namespace BymlSharp;
 
 internal static partial class BymlWriter
 {
-    // Output is assembled in a pooled array and copied out once, so a write allocates only its result.
     private sealed class Buffer(bool bigEndian) : IDisposable
     {
         private byte[] _data = ArrayPool<byte>.Shared.Rent(1 << 16);
@@ -20,7 +19,6 @@ internal static partial class BymlWriter
             _data = [];
         }
 
-        // Pooled arrays arrive dirty, and padding has to be zero.
         public void Reserve(int count)
         {
             Ensure(count);

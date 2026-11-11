@@ -7,8 +7,6 @@ internal static partial class BymlWriter
         Dictionary<Byml, int> Values, Dictionary<Byml, int> Placed,
         List<(int Patch, Byml Node)> Staged, MapLayout Layout);
 
-    // Maps written one after another often share a key sequence, string instances and all, so the sorted
-    // layout of the last map is kept and reused when the next one's keys are the very same strings.
     private sealed class MapLayout
     {
         public int Count = -1;
@@ -17,7 +15,6 @@ internal static partial class BymlWriter
         public int[] EntryAtSlot = [];
         public int[] SlotOfEntry = [];
 
-        // The map being written: its keys and children in dictionary order.
         public string[] Current = [];
         public Byml[] Children = [];
 
@@ -30,7 +27,6 @@ internal static partial class BymlWriter
         }
     }
 
-    // Larger scratch buffers go on the heap, so a hostile document can't overflow the stack.
     private const int StackLimit = 128;
 
     private static void WriteChild(Buffer buffer, Placement at, Byml child, int patchAt)
@@ -40,7 +36,6 @@ internal static partial class BymlWriter
         else buffer.SetI32(patchAt, at.Values[child]);
     }
 
-    // Works out where each of the map's entries goes: sorted by key, which the key table's order also is.
     private static void Reorder(Placement at, Dictionary<string, Byml> map, int count)
     {
         if (at.Layout.KeyIndexBySlot.Length < count)
@@ -73,7 +68,6 @@ internal static partial class BymlWriter
 
     private static void WriteContainer(Buffer buffer, Byml node, Placement at)
     {
-        // Children that are containers wait on a shared stack, each parent owning the run it pushed.
         int begin = at.Staged.Count;
 
         switch (node.Type)
@@ -163,7 +157,6 @@ internal static partial class BymlWriter
                 throw new InvalidOperationException($"{node.Type} is not a container.");
         }
 
-        // Child containers follow their parent, each one's own children before the next sibling.
         List<(int Patch, Byml Node)> staged = at.Staged;
         int end = staged.Count;
         for (int i = begin; i < end; i++)
