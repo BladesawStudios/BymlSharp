@@ -35,7 +35,7 @@ public sealed class Byml
     internal static Byml OfDouble(double value) => new(BymlType.Double, null, BitConverter.DoubleToInt64Bits(value));
     internal static Byml OfAligned(byte[] value, int alignment) => new(BymlType.BinaryAligned, value, alignment);
 
-    internal object? Value => Type switch
+    public object? Value => Type switch
     {
         BymlType.Int => Int,
         BymlType.UInt => UInt,
