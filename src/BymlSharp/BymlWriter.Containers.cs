@@ -74,7 +74,7 @@ internal static partial class BymlWriter
         {
             case BymlType.Map:
             {
-                Dictionary<string, Byml> map = node.MapEntries;
+                Dictionary<string, Byml> map = node.AsMap;
                 int count = map.Count;
 
                 at.Layout.EnsureCapacity(count);
@@ -110,7 +110,7 @@ internal static partial class BymlWriter
 
             case BymlType.Array:
             {
-                List<Byml> items = node.ArrayItems;
+                List<Byml> items = node.AsArray;
                 AddHeader(buffer, BymlType.Array, items.Count);
 
                 for (int i = 0; i < items.Count; i++) buffer.AddU8((byte)items[i].Type);
@@ -129,7 +129,7 @@ internal static partial class BymlWriter
             {
                 bool wide = node.Type is BymlType.HashMap64;
 
-                Dictionary<ulong, Byml> hashMap = node.HashEntries;
+                Dictionary<ulong, Byml> hashMap = node.AsHashMap;
                 ulong[] hashes = new ulong[hashMap.Count];
                 Byml[] children = new Byml[hashMap.Count];
                 hashMap.Keys.CopyTo(hashes, 0);

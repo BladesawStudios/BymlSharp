@@ -84,7 +84,7 @@ internal static partial class BymlWriter
         switch (node.Type)
         {
             case BymlType.Map:
-                foreach ((string key, Byml child) in node.MapEntries)
+                foreach ((string key, Byml child) in node.AsMap)
                 {
                     keys.Add(key);
                     Collect(child, keys, strings, census);
@@ -92,12 +92,12 @@ internal static partial class BymlWriter
                 break;
 
             case BymlType.Array:
-                List<Byml> items = node.ArrayItems;
+                List<Byml> items = node.AsArray;
                 for (int i = 0; i < items.Count; i++) Collect(items[i], keys, strings, census);
                 break;
 
             case BymlType.HashMap32 or BymlType.HashMap64:
-                foreach (Byml child in node.HashEntries.Values) Collect(child, keys, strings, census);
+                foreach (Byml child in node.AsHashMap.Values) Collect(child, keys, strings, census);
                 break;
 
             case BymlType.String:
@@ -150,11 +150,11 @@ internal static partial class BymlWriter
         switch (node.Type)
         {
             case BymlType.Map:
-                foreach (Byml child in node.MapEntries.Values) WriteValue(buffer, child, offsets, visited);
+                foreach (Byml child in node.AsMap.Values) WriteValue(buffer, child, offsets, visited);
                 break;
 
             case BymlType.Array:
-                List<Byml> items = node.ArrayItems;
+                List<Byml> items = node.AsArray;
                 for (int i = 0; i < items.Count; i++) WriteValue(buffer, items[i], offsets, visited);
                 break;
 

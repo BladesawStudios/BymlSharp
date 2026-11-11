@@ -23,13 +23,13 @@ internal static partial class BymlYamlWriter
             switch (node.Type)
             {
                 case BymlType.Map:
-                    foreach (Byml child in node.MapEntries.Values) Count(child, seen);
+                    foreach (Byml child in node.AsMap.Values) Count(child, seen);
                     break;
                 case BymlType.Array:
-                    foreach (Byml child in node.ArrayItems) Count(child, seen);
+                    foreach (Byml child in node.AsArray) Count(child, seen);
                     break;
                 case BymlType.HashMap32 or BymlType.HashMap64:
-                    foreach (Byml child in node.HashEntries.Values) Count(child, seen);
+                    foreach (Byml child in node.AsHashMap.Values) Count(child, seen);
                     break;
             }
         }

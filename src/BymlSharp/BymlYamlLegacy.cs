@@ -136,7 +136,7 @@ internal static partial class BymlYamlLegacy
 
     internal static bool Flow(Byml node) => node.Count <= FlowLimit && (node.Type switch
     {
-        BymlType.Map => node.AsMap.Values,
+        BymlType.Map => (IEnumerable<Byml>)node.AsMap.Values,
         BymlType.Array => node.AsArray,
         _ => node.AsHashMap.Values,
     }).All(v => !v.IsContainer && v.Type is not (BymlType.Binary or BymlType.BinaryAligned or BymlType.String));

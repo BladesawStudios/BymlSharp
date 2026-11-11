@@ -152,19 +152,19 @@ internal static partial class BymlYamlWriter
             switch (node.Type)
             {
                 case BymlType.Map:
-                    Dictionary<string, Byml> map = node.MapEntries;
+                    Dictionary<string, Byml> map = node.AsMap;
                     if (map.Count > BymlYamlLegacy.FlowLimit) return false;
                     foreach (Byml child in map.Values) if (!FlowItem(child)) return false;
                     return true;
 
                 case BymlType.Array:
-                    List<Byml> items = node.ArrayItems;
+                    List<Byml> items = node.AsArray;
                     if (items.Count > BymlYamlLegacy.FlowLimit) return false;
                     foreach (Byml child in items) if (!FlowItem(child)) return false;
                     return true;
 
                 default:
-                    Dictionary<ulong, Byml> hashes = node.HashEntries;
+                    Dictionary<ulong, Byml> hashes = node.AsHashMap;
                     if (hashes.Count > BymlYamlLegacy.FlowLimit) return false;
                     foreach (Byml child in hashes.Values) if (!FlowItem(child)) return false;
                     return true;
@@ -198,7 +198,7 @@ internal static partial class BymlYamlWriter
             switch (node.Type)
             {
                 case BymlType.Map:
-                    foreach ((string key, Byml child) in node.MapEntries)
+                    foreach ((string key, Byml child) in node.AsMap)
                     {
                         if (!(first && firstOnLine)) Spaces(indent);
                         first = false;
@@ -209,7 +209,7 @@ internal static partial class BymlYamlWriter
                     break;
 
                 case BymlType.Array:
-                    foreach (Byml child in node.ArrayItems)
+                    foreach (Byml child in node.AsArray)
                     {
                         if (!(first && firstOnLine)) Spaces(indent);
                         first = false;
@@ -219,7 +219,7 @@ internal static partial class BymlYamlWriter
                     break;
 
                 default:
-                    foreach ((ulong key, Byml child) in node.HashEntries)
+                    foreach ((ulong key, Byml child) in node.AsHashMap)
                     {
                         if (!(first && firstOnLine)) Spaces(indent);
                         first = false;
@@ -245,7 +245,7 @@ internal static partial class BymlYamlWriter
             {
                 case BymlType.Map:
                     Add('{');
-                    foreach ((string key, Byml child) in node.MapEntries)
+                    foreach ((string key, Byml child) in node.AsMap)
                     {
                         if (!first) Add(", ");
                         first = false;
@@ -258,7 +258,7 @@ internal static partial class BymlYamlWriter
 
                 case BymlType.Array:
                     Add('[');
-                    foreach (Byml child in node.ArrayItems)
+                    foreach (Byml child in node.AsArray)
                     {
                         if (!first) Add(", ");
                         first = false;
@@ -269,7 +269,7 @@ internal static partial class BymlYamlWriter
 
                 default:
                     Add('{');
-                    foreach ((ulong key, Byml child) in node.HashEntries)
+                    foreach ((ulong key, Byml child) in node.AsHashMap)
                     {
                         if (!first) Add(", ");
                         first = false;

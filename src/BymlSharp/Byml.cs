@@ -111,13 +111,6 @@ public sealed class Byml
     public List<Byml> AsArray => As<List<Byml>>(BymlType.Array);
     public Dictionary<ulong, Byml> AsHashMap => _ref as Dictionary<ulong, Byml> ?? throw Wrong(BymlType.HashMap64);
 
-    public IDictionary<string, Byml> AsMap => As<Dictionary<string, Byml>>(BymlType.Map);
-
-    public IList<Byml> AsArray => As<List<Byml>>(BymlType.Array);
-
-    public IDictionary<ulong, Byml> AsHashMap
-        => _ref as Dictionary<ulong, Byml> ?? throw Wrong(BymlType.HashMap64);
-
     public int Count => _ref switch
     {
         Dictionary<string, Byml> map => map.Count,
