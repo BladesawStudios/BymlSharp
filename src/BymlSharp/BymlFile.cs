@@ -55,5 +55,7 @@ public sealed class BymlFile(Byml root, int version = BymlVersion.Default, bool 
         return BymlWriter.Write(Root, Version, BigEndian, ShareIdenticalContainers);
     }
 
+    public void Write(Stream stream) => stream.Write(Write());
+
     public void WriteTo(string path) => File.WriteAllBytes(path, Write());
 }

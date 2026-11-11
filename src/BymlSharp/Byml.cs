@@ -20,6 +20,8 @@ public sealed class Byml
 
     public static Byml Null { get; } = new(BymlType.Null, null);
 
+    public static IEqualityComparer<Byml> ValueComparer => BymlWriter.ContentComparer.Instance;
+
     internal static Byml Of(BymlType type, object? value) => new(type, value);
     internal static Byml OfString(string value, int tableIndex) => new(BymlType.String, value, tableIndex);
     internal int StringIndexHint => (int)_bits;
@@ -105,9 +107,9 @@ public sealed class Byml
     public bool IsHashMap => Type is BymlType.HashMap32 or BymlType.HashMap64;
     public bool IsContainer => IsMap || IsArray || IsHashMap;
 
-    internal Dictionary<string, Byml> MapEntries => (Dictionary<string, Byml>)_ref!;
-    internal List<Byml> ArrayItems => (List<Byml>)_ref!;
-    internal Dictionary<ulong, Byml> HashEntries => (Dictionary<ulong, Byml>)_ref!;
+    public Dictionary<string, Byml> AsMap => As<Dictionary<string, Byml>>(BymlType.Map);
+    public List<Byml> AsArray => As<List<Byml>>(BymlType.Array);
+    public Dictionary<ulong, Byml> AsHashMap => _ref as Dictionary<ulong, Byml> ?? throw Wrong(BymlType.HashMap64);
 
     public IDictionary<string, Byml> AsMap => As<Dictionary<string, Byml>>(BymlType.Map);
 
